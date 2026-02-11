@@ -36,7 +36,7 @@ This tool bridges the gap so you can move routes between platforms quickly.
   Use your simulator's procedure selection tools when needed.
 
 ## Screenshot
-![UI Screenshot](assets/screenshot.png)
+![UI Screenshot](/screenshot.png)
 
 ## License
 MIT

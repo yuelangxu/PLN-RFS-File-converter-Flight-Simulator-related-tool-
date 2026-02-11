@@ -1,0 +1,1714 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PLN ↔ RFS Converter (Offline)</title>
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel:#121924;
+      --panel2:#0f1620;
+      --text:#e7eefc;
+      --muted:#a9b7d0;
+      --accent:#4aa3ff;
+      --warn:#ffcc66;
+      --err:#ff6b6b;
+      --ok:#6bff9a;
+      --border:rgba(255,255,255,0.12);
+      --shadow:rgba(0,0,0,0.35);
+      --radius:14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background:linear-gradient(180deg,#070a0e,#0b0f14);
+      color:var(--text);
+    }
+    .wrap{max-width:1180px;margin:20px auto;padding:0 16px;}
+    .card{
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:0 20px 60px var(--shadow);
+      overflow:hidden;
+    }
+    .header{
+      padding:16px 18px;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px;}
+    .header .hint{color:var(--muted);font-size:12px}
+    .content{padding:16px 18px;}
+    textarea{
+      width:100%;
+      min-height:220px;
+      resize:vertical;
+      font-family:var(--mono);
+      font-size:12px;
+      line-height:1.35;
+      color:var(--text);
+      background:#0a0f16;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px;
+      outline:none;
+    }
+    textarea:focus{border-color:rgba(74,163,255,0.55); box-shadow:0 0 0 3px rgba(74,163,255,0.18);}
+    .drop-active{
+      border-color: rgba(74,163,255,0.75) !important;
+      box-shadow: 0 0 0 3px rgba(74,163,255,0.22) !important;
+      background: rgba(74,163,255,0.06) !important;
+    }
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{
+      border:1px solid var(--border);
+      background:#0b1420;
+      color:var(--text);
+      padding:10px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      font-weight:650;
+      letter-spacing:.2px;
+    }
+    .btn.primary{background:rgba(74,163,255,0.18); border-color:rgba(74,163,255,0.35)}
+    .btn.success{background:rgba(107,255,154,0.14); border-color:rgba(107,255,154,0.25)}
+    .btn:hover{filter:brightness(1.08)}
+    .btn:active{transform:translateY(1px)}
+    .status{
+      margin-top:12px;
+      padding:10px 12px;
+      background:rgba(255,255,255,0.04);
+      border:1px solid var(--border);
+      border-radius:12px;
+      font-family:var(--mono);
+      font-size:12px;
+      color:var(--muted);
+      white-space:pre-wrap;
+    }
+    .status .ok{color:var(--ok)}
+    .status .warn{color:var(--warn)}
+    .status .err{color:var(--err)}
+    .tabs{
+      margin-top:14px;
+      border:1px solid var(--border);
+      border-radius:14px;
+      overflow:hidden;
+    }
+    .tabbar{
+      display:flex;
+      gap:0;
+      background:rgba(255,255,255,0.03);
+      border-bottom:1px solid var(--border);
+      overflow:auto;
+    }
+    .tabbar button{
+      flex:0 0 auto;
+      padding:10px 12px;
+      border:0;
+      background:transparent;
+      color:var(--muted);
+      cursor:pointer;
+      font-weight:650;
+      font-size:12px;
+      border-right:1px solid rgba(255,255,255,0.06);
+    }
+    .tabbar button.active{color:var(--text); background:rgba(74,163,255,0.12)}
+    .tabpanel{display:none;padding:14px}
+    .tabpanel.active{display:block}
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(12,1fr);
+      gap:10px;
+    }
+    .field{
+      grid-column:span 6;
+      background:rgba(255,255,255,0.03);
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:12px;
+      padding:10px;
+    }
+    .field.small{grid-column:span 3}
+    .field.tiny{grid-column:span 2}
+    .field.full{grid-column:span 12}
+    .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px}
+    input[type="text"], input[type="number"], select{
+      width:100%;
+      box-sizing:border-box;
+      padding:10px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.10);
+      background:#0a0f16;
+      color:var(--text);
+      font-family:var(--mono);
+      font-size:12px;
+      outline:none;
+    }
+    input[type="text"]:focus, input[type="number"]:focus, select:focus{
+      border-color:rgba(74,163,255,0.55); box-shadow:0 0 0 3px rgba(74,163,255,0.18);
+    }
+    input[type="range"]{width:100%}
+    .inline{
+      display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      color:var(--muted); font-size:12px;
+    }
+    .inline strong{color:var(--text)}
+    .pill{
+      padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);
+      background:rgba(255,255,255,0.04);
+      font-family:var(--mono);font-size:11px;color:var(--muted)
+    }
+    .output{
+      margin-top:14px;
+    }
+    .output textarea{min-height:260px}
+    .footer-note{margin-top:8px;color:var(--muted);font-size:12px}
+    .hidden{display:none!important}
+    .drop-tip{
+      margin-top:8px;
+      color:var(--muted);
+      font-size:12px;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="header">
+      <div>
+        <h1>PLN ↔ RFS Converter (Offline, Browser-only)</h1>
+        <div class="hint">Paste PLN XML/INI or RFS JSON → Load → adjust settings → Generate. Also supports drag & drop into the input box.</div>
+      </div>
+      <div class="row">
+        <button id="btnLoad" class="btn primary">Load Input</button>
+        <button id="btnClear" class="btn">Clear</button>
+      </div>
+    </div>
+    <div class="content">
+      <textarea id="inputBox" placeholder="Paste PLN XML/INI or RFS JSON here... (or drag a .pln / .rfs / .txt file into this box)"></textarea>
+      <div class="drop-tip">Tip: drag a <span class="pill">.pln</span> / <span class="pill">.rfs</span> / <span class="pill">.txt</span> file into the box. We prevent the browser from navigating away.</div>
+
+      <div id="status" class="status">Ready.</div>
+
+      <!-- Dynamic UI -->
+      <div id="uiArea" class="hidden"></div>
+
+      <!-- Output -->
+      <div class="output hidden" id="outputArea">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <div class="inline">
+            <span class="pill" id="outLabel">Output</span>
+            <span class="pill" id="outKind">—</span>
+            <span class="pill" id="outFileName">—</span>
+          </div>
+          <div class="row">
+            <button id="btnCopy" class="btn">Copy Output</button>
+            <button id="btnDownload" class="btn primary">Download</button>
+          </div>
+        </div>
+        <textarea id="outputBox" readonly></textarea>
+        <div class="footer-note" id="outHint"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   0) Small utils
+   ============================================================ */
+function nowUtcIso(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const yyyy = d.getUTCFullYear();
+  const mm = pad(d.getUTCMonth()+1);
+  const dd = pad(d.getUTCDate());
+  const hh = pad(d.getUTCHours());
+  const mi = pad(d.getUTCMinutes());
+  const ss = pad(d.getUTCSeconds());
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+}
+const feetToM = ft => Number(ft) * 0.3048;
+const mToFeet = m => Number(m) / 0.3048;
+const clamp = (x,lo,hi)=>Math.max(lo, Math.min(hi, Number(x)));
+const clamp01 = x => clamp(x,0,1);
+
+function setStatus(lines){
+  const el = document.getElementById('status');
+  el.innerHTML = lines.map(s=>{
+    if(s.startsWith("✅")) return `<span class="ok">${escapeHtml(s)}</span>`;
+    if(s.startsWith("⚠")) return `<span class="warn">${escapeHtml(s)}</span>`;
+    if(s.startsWith("❌")) return `<span class="err">${escapeHtml(s)}</span>`;
+    return escapeHtml(s);
+  }).join("\n");
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
+}
+
+/* ============================================================
+   0.5) Drag & Drop helpers (prevent navigation)
+   ============================================================ */
+function looksLikeTextFile(file){
+  const name = (file?.name || "").toLowerCase();
+  if(name.endsWith(".pln") || name.endsWith(".rfs") || name.endsWith(".txt") || name.endsWith(".json") || name.endsWith(".xml") || name.endsWith(".ini")) return true;
+  // Some browsers provide type="", treat unknown as potential text
+  return (file?.type || "").startsWith("text/") || file?.type === "application/json" || file?.type === "application/xml" || file?.type === "";
+}
+async function readFileAsText(file){
+  // Modern browsers: file.text()
+  return await file.text();
+}
+
+/* ============================================================
+   1) Robust coordinate parsing
+   ============================================================ */
+function normaliseQuotesAndSeparators(s){
+  s = (s ?? "").trim();
+  s = s.replaceAll("′","'").replaceAll("″",'"')
+       .replaceAll("“",'"').replaceAll("”",'"')
+       .replaceAll("’","'");
+  s = s.replace(/\s*,\s*/g, ",");
+  s = s.replace(/\s+/g, " ");
+  return s;
+}
+
+function parseWorldPosition(wpStr){
+  const s = normaliseQuotesAndSeparators(wpStr);
+  const parts = s.split(",").map(x=>x.trim());
+  if(parts.length !== 3) throw new Error(`WorldPosition format unexpected: ${wpStr}`);
+  const [latS, lonS, altS] = parts;
+
+  const dmsToDec = (s1)=>{
+    const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:°|deg)\s*(\d+)\s*['’]\s*([\d.]+)\s*["]$/);
+    if(!m) return null;
+    const hemi = m[1];
+    const deg = Number(m[2]), minute = Number(m[3]), sec = Number(m[4]);
+    let dec = deg + minute/60 + sec/3600;
+    if(hemi === "S" || hemi === "W") dec = -dec;
+    return dec;
+  };
+  const dmToDec = (s1)=>{
+    const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:\*|°|deg)\s*([\d.]+)\s*['’]$/);
+    if(!m) return null;
+    const hemi = m[1];
+    const deg = Number(m[2]), minute = Number(m[3]);
+    let dec = deg + minute/60;
+    if(hemi === "S" || hemi === "W") dec = -dec;
+    return dec;
+  };
+
+  const lat = dmsToDec(latS) ?? dmToDec(latS);
+  const lon = dmsToDec(lonS) ?? dmToDec(lonS);
+  if(lat === null || lon === null) throw new Error(`DMS/DM parse failed: ${wpStr}`);
+
+  const altFt = Number(String(altS).replace("+",""));
+  const altM = feetToM(altFt);
+  return {lat, lon, alt_m: altM};
+}
+
+function tryExtractCoordFromTokens(tokens){
+  if(!tokens || !tokens.length) return null;
+  let idx = null;
+  for(let i=0;i<tokens.length;i++){
+    const tt = tokens[i].trim();
+    if(/^[NS]\s*\d+/.test(tt)){ idx = i; break; }
+  }
+  if(idx === null || idx+2 >= tokens.length) return null;
+  const latS = tokens[idx].trim(), lonS = tokens[idx+1].trim(), altS = tokens[idx+2].trim();
+  try{
+    return parseWorldPosition(`${latS},${lonS},${altS}`);
+  }catch(_){
+    return null;
+  }
+}
+
+/* ============================================================
+   2) PLN parsing (XML + INI)
+   ============================================================ */
+function xmlFindText(root, tagEnds){
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node = walker.currentNode;
+  while(node){
+    if(node.tagName && node.tagName.endsWith(tagEnds)){
+      return node.textContent ?? "";
+    }
+    node = walker.nextNode();
+  }
+  return null;
+}
+
+function runwayDesignatorToLetter(s){
+  if(!s) return "";
+  s = String(s).trim().toUpperCase();
+  if(s === "LEFT" || s === "L") return "L";
+  if(s === "RIGHT" || s === "R") return "R";
+  if(s === "CENTER" || s === "CENTRE" || s === "C") return "C";
+  return "";
+}
+
+function inferRwyFromWpXml(wpEl){
+  let rwyNum = null;
+  let rwyDes = "";
+  for(const child of Array.from(wpEl.children)){
+    if(child.tagName.endsWith("RunwayNumberFP")){
+      const txt = (child.textContent ?? "").trim();
+      if(txt) rwyNum = txt;
+    }else if(child.tagName.endsWith("RunwayDesignatorFP")){
+      rwyDes = runwayDesignatorToLetter(child.textContent ?? "");
+    }
+  }
+  if(rwyNum){
+    try{
+      const n = parseInt(rwyNum,10);
+      rwyNum = String(n).padStart(2,"0");
+    }catch(_){
+      rwyNum = String(rwyNum).trim();
+    }
+    return `${rwyNum}${rwyDes}`;
+  }
+  return "";
+}
+
+function parsePlnXml(xmlText){
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  const parseError = doc.querySelector("parsererror");
+  if(parseError) throw new Error("XML parse error (parsererror).");
+
+  const root = doc.documentElement;
+
+  const departure = (xmlFindText(root, "DepartureID") ?? "").trim();
+  const destination = (xmlFindText(root, "DestinationID") ?? "").trim();
+  const title = (xmlFindText(root, "Title") ?? `${departure} - ${destination}`).trim();
+  const descr = (xmlFindText(root, "Descr") ?? "").trim();
+
+  let cruiseFt = null;
+  const cruisingAlt = xmlFindText(root, "CruisingAlt");
+  if(cruisingAlt){
+    const v = Number(String(cruisingAlt).trim());
+    cruiseFt = Number.isFinite(v) ? v : null;
+  }
+
+  const depLLA = xmlFindText(root, "DepartureLLA");
+  const dstLLA = xmlFindText(root, "DestinationLLA");
+  let dep_lla = null, dst_lla = null;
+  if(depLLA && depLLA.trim()){
+    try{ dep_lla = parseWorldPosition(depLLA.trim()); }catch(_){ dep_lla = null; }
+  }
+  if(dstLLA && dstLLA.trim()){
+    try{ dst_lla = parseWorldPosition(dstLLA.trim()); }catch(_){ dst_lla = null; }
+  }
+
+  const waypoints = [];
+  const allWp = Array.from(root.getElementsByTagName("*")).filter(el=>el.tagName.endsWith("ATCWaypoint"));
+  for(const wp of allWp){
+    let wp_type="", ident="", region="", airway="";
+    let pos=null;
+    let alt1fp_ft=null;
+
+    if(wp.hasAttribute("id")){
+      const id = wp.getAttribute("id");
+      if(id) ident = id.trim();
+    }
+
+    const rwy_hint = inferRwyFromWpXml(wp);
+
+    for(const child of Array.from(wp.children)){
+      if(child.tagName.endsWith("ATCWaypointType")){
+        wp_type = (child.textContent ?? "").trim();
+      }else if(child.tagName.endsWith("WorldPosition")){
+        pos = (child.textContent ?? "").trim();
+      }else if(child.tagName.endsWith("ATCAirway")){
+        airway = (child.textContent ?? "").trim();
+      }else if(child.tagName.endsWith("Alt1FP")){
+        const v = Number((child.textContent ?? "").trim());
+        alt1fp_ft = Number.isFinite(v) ? v : null;
+      }else if(child.tagName.endsWith("ICAO")){
+        for(const sub of Array.from(child.children)){
+          if(sub.tagName.endsWith("ICAOIdent")){
+            const icao_ident = (sub.textContent ?? "").trim();
+            if(icao_ident && !ident) ident = icao_ident;
+          }else if(sub.tagName.endsWith("ICAORegion")){
+            region = (sub.textContent ?? "").trim();
+          }
+        }
+      }
+    }
+
+    let lat=null, lon=null, alt_m=null;
+    if(pos){
+      try{
+        const c = parseWorldPosition(pos);
+        lat=c.lat; lon=c.lon; alt_m=c.alt_m;
+      }catch(_){
+        lat=lon=alt_m=null;
+      }
+    }
+    if(alt1fp_ft !== null && alt1fp_ft !== undefined){
+      alt_m = feetToM(alt1fp_ft);
+    }
+
+    waypoints.push({wp_type, ident, region, airway, lat, lon, alt_m, rwy_hint});
+  }
+
+  // Infer runway hints from first/last Airport waypoint
+  let to_rwy_hint="", ld_rwy_hint="";
+  const firstAirport = waypoints.find(w=>String(w.wp_type||"").trim().toLowerCase()==="airport");
+  const lastAirport  = [...waypoints].reverse().find(w=>String(w.wp_type||"").trim().toLowerCase()==="airport");
+  if(firstAirport && firstAirport.rwy_hint) to_rwy_hint = firstAirport.rwy_hint;
+  if(lastAirport  && lastAirport.rwy_hint)  ld_rwy_hint = lastAirport.rwy_hint;
+
+  return {
+    kind:"PLN", format:"XML",
+    departure, destination, title, descr,
+    cruise_ft: cruiseFt,
+    dep_lla: dep_lla ? [dep_lla.lat, dep_lla.lon, dep_lla.alt_m] : null,
+    dst_lla: dst_lla ? [dst_lla.lat, dst_lla.lon, dst_lla.alt_m] : null,
+    waypoints,
+    to_rwy_hint, ld_rwy_hint
+  };
+}
+
+function parsePlnIni(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0).map(l=>l.replace(/\r/g,""));
+  const kv = {};
+  for(const ln0 of lines){
+    const s = ln0.trim();
+    if(s.startsWith(";") || s.startsWith("#")) continue;
+    if(s.startsWith("[") && s.endsWith("]")) continue;
+    const eq = s.indexOf("=");
+    if(eq>=0){
+      const k = s.slice(0,eq).trim().toLowerCase();
+      const v = s.slice(eq+1).trim();
+      kv[k]=v;
+    }
+  }
+
+  const title = (kv["title"] ?? "").trim();
+  const descr = (kv["description"] ?? "").trim();
+  const fp_type = (kv["type"] ?? "").trim();
+
+  let cruise_ft = null;
+  if("cruising_altitude" in kv){
+    const v = Number(String(kv["cruising_altitude"]).trim());
+    cruise_ft = Number.isFinite(v) ? v : null;
+  }
+
+  const splitIdAndCoord = (s)=>{
+    const parts = String(s ?? "").split(",",2).map(x=>x.trim());
+    if(parts.length===2) return [parts[0], parts[1]];
+    return [String(s ?? "").trim(), ""];
+  };
+  const [dep, depCoord] = splitIdAndCoord(kv["departure_id"] ?? "");
+  const [arr, arrCoord] = splitIdAndCoord(kv["destination_id"] ?? "");
+
+  let dep_lla=null, dst_lla=null;
+  if(depCoord){
+    try{ const c=parseWorldPosition(depCoord); dep_lla=[c.lat,c.lon,c.alt_m]; }catch(_){ dep_lla=null; }
+  }
+  if(arrCoord){
+    try{ const c=parseWorldPosition(arrCoord); dst_lla=[c.lat,c.lon,c.alt_m]; }catch(_){ dst_lla=null; }
+  }
+
+  const wpItems = [];
+  for(const [k,v] of Object.entries(kv)){
+    if(k.startsWith("waypoint.")){
+      const idx = parseInt(k.split(".",2)[1],10);
+      if(Number.isFinite(idx)) wpItems.push([idx,v]);
+    }
+  }
+  wpItems.sort((a,b)=>a[0]-b[0]);
+
+  const waypoints=[];
+  for(const [idx, raw] of wpItems){
+    const tokens = String(raw ?? "").split(",").map(t=>t.trim()).filter(t=>t!=="");
+    const coord = tryExtractCoordFromTokens(tokens);
+    let lat=null, lon=null, alt_m=null;
+    if(coord){ lat=coord.lat; lon=coord.lon; alt_m=coord.alt_m; }
+
+    let ident="";
+    let wp_type="User";
+    let airway="";
+
+    if(tokens.length){
+      const first=tokens[0].trim();
+      if(/^[A-Z0-9]{2,6}$/.test(first)) ident=first;
+    }
+    if(tokens.length>=2){
+      const t2=tokens[1].trim().toUpperCase();
+      if(t2==="A") wp_type="Airport";
+      else if(t2==="V") wp_type="VOR";
+      else if(t2==="N") wp_type="NDB";
+      else if(t2==="I") wp_type="Intersection";
+      else wp_type="User";
+    }
+    if(tokens.length){
+      const last=tokens[tokens.length-1].trim();
+      if(/^[A-Z0-9]{3,10}$/.test(last) && !/^[NSWE]\d/.test(last) && !/^[+\-]?\d/.test(last)){
+        airway=last;
+      }
+    }
+    if(!ident) ident=`WP${idx}`;
+
+    waypoints.push({wp_type, ident, region:"", airway, lat, lon, alt_m, rwy_hint:""});
+  }
+
+  const finalTitle = title || `${dep.trim()} - ${arr.trim()}`.replace(/^ - | - $/g,"");
+
+  return {
+    kind:"PLN", format:"INI",
+    departure: dep.trim(), destination: arr.trim(),
+    title: finalTitle, descr,
+    cruise_ft,
+    dep_lla, dst_lla,
+    waypoints,
+    fp_type,
+    to_rwy_hint:"", ld_rwy_hint:""
+  };
+}
+
+function parsePlnAny(text){
+  let t = String(text ?? "").trim();
+  if(!t) throw new Error("Empty text.");
+  if(t.toLowerCase().includes("[flightplan]")) return parsePlnIni(t);
+  if(t.includes("<SimBase") && !t.trimStart().startsWith("<")){
+    t = t.slice(t.indexOf("<SimBase"));
+  }
+  if(t.trimStart().startsWith("<")) return parsePlnXml(t);
+  throw new Error("Unrecognised PLN format.");
+}
+
+/* ============================================================
+   3) RFS parsing (JSON) - J_FlightPlan is JSON string
+   ============================================================ */
+function parseRfsJson(text){
+  let rfs;
+  try{ rfs = JSON.parse(text); }catch(e){ throw new Error(`RFS JSON parse failed: ${e}`); }
+  if(typeof rfs !== "object" || rfs === null || Array.isArray(rfs)) throw new Error("RFS root is not an object/dict.");
+
+  const fpRaw = rfs["J_FlightPlan"];
+  if(!fpRaw) throw new Error("RFS missing J_FlightPlan.");
+  let fp;
+  try{ fp = JSON.parse(fpRaw); }catch(e){ throw new Error(`RFS J_FlightPlan JSON parse failed: ${e}`); }
+
+  const fplist = fp["fPSingleSerializerList"] || [];
+  if(!fplist.length) throw new Error("J_FlightPlan has empty fPSingleSerializerList.");
+  const f0 = fplist[0];
+
+  const dep = String(f0["J_FPDepartureAirport"] || "").trim();
+  const arr = String(f0["J_FPArrivalAirport"] || "").trim();
+  const to_rwy = String(f0["J_AssignedTakeoffRunway"] || "").trim();
+  const ld_rwy = String(f0["J_AssignedLandingRunway"] || "").trim();
+
+  const points = f0["FPPoints"] || [];
+  const norm_points = points.map(p=>{
+    let lat=null, lon=null;
+    try{
+      lat = Number(p?.Coords?.m_Latitude);
+      lon = Number(p?.Coords?.m_Longitude);
+      if(!Number.isFinite(lat)) lat=null;
+      if(!Number.isFinite(lon)) lon=null;
+    }catch(_){ lat=lon=null; }
+
+    let alt_m = p?.Altitude ?? null;
+    alt_m = (alt_m===null || alt_m===undefined) ? null : Number(alt_m);
+    if(!Number.isFinite(alt_m)) alt_m=null;
+
+    return {
+      ident: String(p?.ident || "").trim(),
+      type: p?.type,
+      isAirport: Boolean(p?.isAirport || false),
+      Airport: String(p?.Airport || "").trim(),
+      lat, lon, alt_m,
+      raw: p
+    };
+  });
+
+  return { kind:"RFS", rfs, fp, dep, arr, to_rwy, ld_rwy, points:norm_points };
+}
+
+/* ============================================================
+   4) Auto-detect input kind
+   ============================================================ */
+function detectInputKind(text){
+  const t = String(text ?? "").trim();
+  if(!t) return null;
+  if(t.startsWith("{") && t.includes('"J_FlightPlan"')) return "RFS";
+  if(t.toLowerCase().includes("[flightplan]") || t.includes("<SimBase") || t.trimStart().startsWith("<")) return "PLN";
+  if(t.startsWith("{")){
+    try{
+      const obj = JSON.parse(t);
+      if(obj && typeof obj === "object" && !Array.isArray(obj) && ("J_FlightPlan" in obj)) return "RFS";
+    }catch(_){}
+  }
+  return null;
+}
+
+/* ============================================================
+   5) Weather mappings & constraints
+   ============================================================ */
+const METAR_MODE = { CUSTOM:0, REAL:1, RANDOM:2 };
+const WEATHER_MAP = { CLEAR:0, FOG:1, RAIN:2, SNOW:3, STORM:4 };
+const CLOUD_MAP = {
+  "NO SIGNIFICANT CLOUD":0,
+  "FEW CLOUDS":1,
+  "SCATTERED CLOUDS":2,
+  "BROKEN CLOUDS":3,
+  "OVERCAST":4
+};
+const SNOW_COVER_MAP = { NONE:0, LOW:1, MEDIUM:2, HIGH:3 };
+
+function enforceWeatherConstraints(state, els){
+  const w = state.weather;
+  if(w === "CLEAR"){
+    state.fog_pct = 0;
+    els.fog_pct.disabled = true;
+    els.clouds.disabled = false;
+  }else{
+    state.clouds = "OVERCAST";
+    els.clouds.disabled = true;
+    els.fog_pct.disabled = false;
+    if(state.fog_pct < 5) state.fog_pct = 5;
+  }
+  els.turb_pct.disabled = (w === "STORM");
+}
+
+/* ============================================================
+   6) PLN -> RFS builder
+   ============================================================ */
+function firstCoord(pln){
+  for(const w of pln.waypoints){
+    if(w.lat!=null && w.lon!=null){
+      return [w.lat, w.lon, (w.alt_m!=null ? w.alt_m : 0.0)];
+    }
+  }
+  if(pln.dep_lla) return [pln.dep_lla[0], pln.dep_lla[1], pln.dep_lla[2]];
+  return [0,0,0];
+}
+function lastCoord(pln){
+  for(let i=pln.waypoints.length-1;i>=0;i--){
+    const w = pln.waypoints[i];
+    if(w.lat!=null && w.lon!=null){
+      return [w.lat, w.lon, (w.alt_m!=null ? w.alt_m : 0.0)];
+    }
+  }
+  if(pln.dst_lla) return [pln.dst_lla[0], pln.dst_lla[1], pln.dst_lla[2]];
+  return [0,0,0];
+}
+
+function buildFpPointsFromPln(pln, dep, arr, to_rwy, ld_rwy, cruise_ft){
+  const notes=[];
+  const fp_points=[];
+  if(to_rwy){
+    const [lat,lon,alt_m] = firstCoord(pln);
+    fp_points.push({
+      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:dep,
+      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
+      ident:`RW${to_rwy}`, type:25, isAirport:true, IconId:7, Description:"RUNWAY"
+    });
+  }
+  let dropped=0;
+  for(let i=0;i<pln.waypoints.length;i++){
+    const wp = pln.waypoints[i];
+    const lat=wp.lat, lon=wp.lon;
+    if(lat==null || lon==null){ dropped++; continue; }
+    let alt_m = wp.alt_m;
+    if(alt_m==null) alt_m = feetToM(cruise_ft);
+    fp_points.push({
+      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:"",
+      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
+      ident:(wp.ident || `WP${i+1}`),
+      type:13, isAirport:false, IconId:1, Description:"GPS-WP"
+    });
+  }
+  if(dropped) notes.push(`Dropped ${dropped} waypoint(s) with no coordinates (no navdata lookup in this script).`);
+  if(ld_rwy){
+    const [lat,lon,alt_m] = lastCoord(pln);
+    fp_points.push({
+      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:arr,
+      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
+      ident:`RW${ld_rwy}`, type:25, isAirport:true, IconId:7, Description:"RUNWAY"
+    });
+  }
+  if(!fp_points.length) throw new Error("No FPPoints produced. All waypoints missing coords AND no Dep/Dst coords found.");
+  return {fp_points, notes};
+}
+
+function buildUniformWeather(state){
+  let {weather, clouds, wind_dir, wind_spd, temp_c, cloud_base_ft, turb_pct, fog_pct, snow_cov, qnh, vis_m} = state;
+
+  if(weather === "CLEAR"){
+    fog_pct = 0;
+  }else{
+    clouds = "OVERCAST";
+    fog_pct = Math.max(5, fog_pct);
+  }
+
+  return {
+    "COORDS": {"m_Latitude": 45.0, "m_Longitude": 0.0},
+    "Wind": Number(wind_spd),
+    "m_Coords": {"m_Latitude": 45.0, "m_Longitude": 0.0},
+    "Ident": "",
+    "WeatherType": WEATHER_MAP[weather],
+    "CloudType": CLOUD_MAP[clouds],
+    "CloudsBase": feetToM(cloud_base_ft),
+    "QNH": parseInt(qnh,10),
+    "_wind": Number(wind_spd),
+    "WindDirection": Number(wind_dir),
+    "TurbulenceNormalized": clamp01(Number(turb_pct)/100.0),
+    "RefAltitude": 0.0,
+    "Temperature": Number(temp_c),
+    "DevTemperature": 0.0,
+    "FogIntensityNormalized": clamp01(Number(fog_pct)/100.0),
+    "SnowCoverage": SNOW_COVER_MAP[snow_cov],
+    "VisibilityMeters": Number(vis_m)
+  };
+}
+
+function buildLivery(state){
+  const aircraft_id = (state.liv_aircraft_id || "A320N").trim() || "A320N";
+  const liv_id = (state.liv_id || "DEFAULT").trim() || "DEFAULT";
+  const liv_name = (state.liv_name || liv_id).trim() || liv_id;
+  const liv_by = (state.liv_by || "Rortos").trim() || "Rortos";
+  const liv_ver = parseInt(state.liv_ver,10) || 0;
+  const liv_type = parseInt(state.liv_type,10) || 0;
+  const liv_date = parseInt(state.liv_date,10) || 0;
+  const liv_fav = Boolean(state.liv_fav);
+
+  return {
+    "AircraftID": aircraft_id,
+    "ID": liv_id,
+    "Version": liv_ver,
+    "Type": liv_type,
+    "By": liv_by,
+    "Date": liv_date,
+    "IsFavorite": liv_fav,
+    "Fps": 0,
+    "Name": liv_name,
+
+    "<AircraftID>k__BackingField": aircraft_id,
+    "<ID>k__BackingField": liv_id,
+    "<Version>k__BackingField": liv_ver,
+    "<Type>k__BackingField": liv_type,
+    "<By>k__BackingField": liv_by,
+    "<Date>k__BackingField": liv_date,
+    "<IsFavorite>k__BackingField": liv_fav,
+    "m_Fps": 0,
+    "m_Name": liv_name
+  };
+}
+
+function buildRfsFromPln(pln, state){
+  const notes=[];
+  const title = state.title ?? "";
+  const descr = state.descr ?? "";
+  const tags  = state.tags ?? "";
+
+  const date_is_real = (state.dt_mode === "REAL");
+  const activity_date = date_is_real ? nowUtcIso() : ((state.custom_iso || "").trim() || nowUtcIso());
+
+  const livery = buildLivery(state);
+  const aircraft_id = livery.AircraftID;
+
+  const aircraft_load = {
+    FuelQuantityNormalized: clamp01(Number(state.fuel_pct)/100.0),
+    PassengersNumber: parseInt(state.pax,10),
+    CargoLoad: parseInt(state.cargo_kg,10),
+    MealsLoad: 0
+  };
+
+  const dep = String(state.dep || "").trim();
+  const arr = String(state.arr || "").trim();
+  if(!dep || !arr) throw new Error("DEP/ARR cannot be empty.");
+
+  const to_rwy = String(state.to_rwy || "").trim();
+  const ld_rwy = String(state.ld_rwy || "").trim();
+  const cruise_ft = Number(state.cruise_ft);
+
+  const {fp_points, notes:fpNotes} = buildFpPointsFromPln(pln, dep, arr, to_rwy, ld_rwy, cruise_ft);
+  notes.push(...fpNotes);
+
+  const j_flight_plan_obj = {
+    selectedIdx: 0,
+    fPSingleSerializerList: [{
+      J_FPDepartureAirport: dep,
+      J_FPArrivalAirport: arr,
+      J_AssignedTakeoffRunway: to_rwy,
+      J_AssignedLandingRunway: ld_rwy,
+      J_Sid:"", J_SidTransition:"",
+      J_Star:"",
+      J_Approach:"", J_ApproachTransition:"",
+      FPPoints: fp_points,
+      J_ArrivalAirportParkingPoint: String(state.arr_parking || "0").trim() || "0"
+    }]
+  };
+
+  let dep_lat, dep_lon;
+  if(pln.dep_lla){
+    dep_lat = pln.dep_lla[0]; dep_lon = pln.dep_lla[1];
+  }else{
+    [dep_lat, dep_lon] = firstCoord(pln);
+  }
+
+  const spawn_id = String(state.spawn_id || "0").trim() || "0";
+  const departure_gate = (state.start_pos === "GATE");
+
+  let seed;
+  if(String(state.seed || "").trim()===""){
+    seed = Math.floor(1 + Math.random() * 2147483646);
+    notes.push(`Seed auto-generated: ${seed}`);
+  }else{
+    seed = parseInt(String(state.seed).trim(),10);
+  }
+
+  const metar_mode = state.metar_mode;
+  const uniform_weather = buildUniformWeather(state);
+  const flight_activity_weather = METAR_MODE[metar_mode];
+
+  const rfs = {
+    Livery: livery,
+    StartType: 0,
+    LevelConfig: {
+      LevelName:"Simulator", TutorialID:null, TutorialCheckpointStepIndex:0, TutorialCheckpointPreferences:null,
+      "<LevelName>k__BackingField":"Simulator","<TutorialID>k__BackingField":null,
+      "<TutorialCheckpointStepIndex>k__BackingField":0,"<TutorialCheckpointPreferences>k__BackingField":null
+    },
+    Title: title,
+    Description: descr,
+    Tags: tags,
+    AircraftLoad: aircraft_load,
+    m_livery: livery,
+
+    InitialSpeed: 0.0,
+    m_InitialPosition: {m_Latitude:2000.0, m_Longitude:2000.0},
+    InitialAltitude: 0.0,
+    InitialHeading: 0.0,
+    InitialWaypointIdent: "",
+
+    DepartureGate: departure_gate,
+    SpawnPoint: {
+      Coords: {m_Latitude:Number(dep_lat), m_Longitude:Number(dep_lon)},
+      Type: 1,
+      ID: spawn_id,
+      m_groundPointCoords: {m_Latitude:Number(dep_lat), m_Longitude:Number(dep_lon)}
+    },
+
+    ProNeeded: Boolean(state.pro_needed),
+    Seed: seed,
+
+    J_AircraftID: aircraft_id,
+    J_StartReferenceAirportID: dep,
+    J_FlightPlan: JSON.stringify(j_flight_plan_obj),
+
+    ActivityType: 0,
+    FlightActivityWeather: flight_activity_weather,
+    UniformWeather: uniform_weather,
+
+    ActivityDate: activity_date,
+    DateIsReal: date_is_real,
+
+    ActivityHandlerCheckersManager: {
+      DepartureAirportsCheckersManagers:{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
+      ArrivalAirportsCheckersManagers:{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
+      "<DepartureAirportsCheckersManagers>k__BackingField":{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
+      "<ArrivalAirportsCheckersManagers>k__BackingField":{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]}
+    }
+  };
+
+  return {rfs, notes};
+}
+
+/* ============================================================
+   7) RFS -> PLN helpers + builder
+   ============================================================ */
+function decToDms(dec, isLat=true){
+  const hemiPos = isLat ? "N" : "E";
+  const hemiNeg = isLat ? "S" : "W";
+  const hemi = (dec>=0) ? hemiPos : hemiNeg;
+  const x = Math.abs(Number(dec));
+  const deg = Math.floor(x);
+  const mFloat = (x - deg) * 60.0;
+  const minute = Math.floor(mFloat);
+  const sec = (mFloat - minute) * 60.0;
+  return {hemi, deg, minute, sec};
+}
+function formatDms(dec, isLat=true){
+  const {hemi,deg,minute,sec} = decToDms(dec,isLat);
+  return `${hemi}${deg}° ${minute}' ${sec.toFixed(2)}"`;
+}
+function formatDmStar(dec, isLat=true){
+  const {hemi,deg,minute,sec} = decToDms(dec,isLat);
+  const minutesDecimal = minute + sec/60.0;
+  return `${hemi}${deg}* ${minutesDecimal.toFixed(2)}'`;
+}
+function formatAltFt(alt_m){
+  const altFt = mToFeet((alt_m!=null)?alt_m:0.0);
+  const sign = (altFt>=0) ? "+" : "-";
+  const abs = Math.abs(altFt);
+  const s = abs.toFixed(2).padStart(9,"0");
+  return `${sign}${s}`;
+}
+function toWorldposStr(lat, lon, alt_m){
+  return `${formatDms(lat,true)},${formatDms(lon,false)},${formatAltFt(alt_m)}`;
+}
+function toIniCoordStr(lat, lon, alt_m){
+  return `${formatDmStar(lat,true)}, ${formatDmStar(lon,false)}, ${formatAltFt(alt_m)}`;
+}
+function parseRwyString(rwy){
+  const s = String(rwy||"").trim().toUpperCase();
+  if(!s) return ["",""];
+  const m = s.match(/^(\d{1,2})([LRC])?$/);
+  if(!m) return [s,""];
+  const num = String(parseInt(m[1],10)).padStart(2,"0");
+  const des = m[2] || "";
+  const map = {L:"LEFT", R:"RIGHT", C:"CENTER"};
+  return [num, map[des] || ""];
+}
+function prettyXmlString(xmlString){
+  const IND = "  ";
+  const reg = /(>)(<)(\/*)/g;
+  let xml = String(xmlString).replace(reg, "$1\n$2$3");
+  const lines = xml.split("\n").map(l=>l.trim()).filter(l=>l.length>0);
+  let pad = 0;
+  const out = [];
+  for(const line of lines){
+    if(/^<\/.+>/.test(line)) pad = Math.max(pad - 1, 0);
+    out.push(IND.repeat(pad) + line);
+    const isOpening =
+      /^<[^!?\/][^>]*>$/.test(line) && !/\/>$/.test(line) && !/^<[^>]+>.*<\/[^>]+>$/.test(line);
+    if(isOpening) pad += 1;
+  }
+  return out.join("\n") + "\n";
+}
+function withXmlDeclaration(prettyBody){
+  const decl = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+  const body = String(prettyBody || "");
+  if(body.startsWith("<?xml")) return body;
+  return decl + body;
+}
+
+function extractRoutePointsFromRfsPoints(points){
+  const route=[];
+  for(const p of points){
+    const ident = String(p.ident||"").toUpperCase();
+    if(p.type===25 && ident.startsWith("RW")) continue;
+    if(p.lat==null || p.lon==null) continue;
+    route.push(p);
+  }
+  return route;
+}
+
+function buildPlnXmlFromRfs(rfsPack, state){
+  const dep = String(state.dep||"").trim();
+  const arr = String(state.arr||"").trim();
+  const title = (String(state.title||"").trim() || `${dep} to ${arr}`);
+  const descr = (String(state.descr||"").trim() || `${dep} to ${arr} created by RFS converter`);
+  const fp_type = state.fp_type;
+  const route_type = state.route_type; // LowAlt / HighAlt
+  const cruise_ft = Number(state.cruise_ft);
+
+  const to_rwy = String(state.to_rwy||"").trim();
+  const ld_rwy = String(state.ld_rwy||"").trim();
+  const dep_name = (String(state.dep_name||"").trim() || dep);
+  const arr_name = (String(state.arr_name||"").trim() || arr);
+
+  const pts = extractRoutePointsFromRfsPoints(rfsPack.points);
+  if(!pts.length) throw new Error("No usable route points found in RFS (coords missing or only runway points).");
+
+  const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = (pts[0].alt_m ?? 0.0);
+  const arr_lat = pts[pts.length-1].lat, arr_lon = pts[pts.length-1].lon, arr_alt_m = (pts[pts.length-1].alt_m ?? 0.0);
+
+  const [dep_rwy_num, dep_rwy_des] = parseRwyString(to_rwy);
+  const [arr_rwy_num, arr_rwy_des] = parseRwyString(ld_rwy);
+
+  const doc = document.implementation.createDocument(null, "SimBase.Document", null);
+  const root = doc.documentElement;
+  root.setAttribute("Type","AceXML");
+  root.setAttribute("version","1,0");
+
+  const descrEl = doc.createElement("Descr");
+  descrEl.textContent = "AceXML Document";
+  root.appendChild(descrEl);
+
+  const fp = doc.createElement("FlightPlan.FlightPlan");
+  root.appendChild(fp);
+
+  const add = (name, text)=>{
+    const el = doc.createElement(name);
+    el.textContent = String(text);
+    fp.appendChild(el);
+    return el;
+  };
+
+  add("Title", title);
+  add("FPType", fp_type);
+  add("RouteType", route_type);
+  add("CruisingAlt", cruise_ft.toFixed(3));
+  add("DepartureID", dep);
+  add("DepartureLLA", toWorldposStr(dep_lat, dep_lon, dep_alt_m));
+  add("DestinationID", arr);
+  add("DestinationLLA", toWorldposStr(arr_lat, arr_lon, arr_alt_m));
+  add("Descr", descr);
+  add("DepartureName", dep_name);
+  add("DestinationName", arr_name);
+
+  const includeRwy = Boolean(state.include_rwy);
+
+  for(let i=0;i<pts.length;i++){
+    const p = pts[i];
+    const isFirst = (i===0);
+    const isLast = (i===pts.length-1);
+
+    let wp_id, wp_type, ident;
+    if(isFirst){ wp_id = dep; wp_type="Airport"; ident=dep; }
+    else if(isLast){ wp_id = arr; wp_type="Airport"; ident=arr; }
+    else{
+      wp_id = String(p.ident || `WP${i}`).trim() || `WP${i}`;
+      wp_type = "User";
+      ident = wp_id;
+    }
+
+    const wpEl = doc.createElement("ATCWaypoint");
+    wpEl.setAttribute("id", wp_id);
+
+    const tEl = doc.createElement("ATCWaypointType");
+    tEl.textContent = wp_type;
+    wpEl.appendChild(tEl);
+
+    const wpos = doc.createElement("WorldPosition");
+    wpos.textContent = toWorldposStr(p.lat, p.lon, (p.alt_m ?? feetToM(cruise_ft)));
+    wpEl.appendChild(wpos);
+
+    if(includeRwy && isFirst && dep_rwy_num){
+      const rn = doc.createElement("RunwayNumberFP");
+      rn.textContent = dep_rwy_num;
+      wpEl.appendChild(rn);
+      if(dep_rwy_des){
+        const rd = doc.createElement("RunwayDesignatorFP");
+        rd.textContent = dep_rwy_des;
+        wpEl.appendChild(rd);
+      }
+    }
+    if(includeRwy && isLast && arr_rwy_num){
+      const rn = doc.createElement("RunwayNumberFP");
+      rn.textContent = arr_rwy_num;
+      wpEl.appendChild(rn);
+      if(arr_rwy_des){
+        const rd = doc.createElement("RunwayDesignatorFP");
+        rd.textContent = arr_rwy_des;
+        wpEl.appendChild(rd);
+      }
+    }
+
+    const icao = doc.createElement("ICAO");
+    const icaoIdent = doc.createElement("ICAOIdent");
+    icaoIdent.textContent = ident;
+    icao.appendChild(icaoIdent);
+    wpEl.appendChild(icao);
+
+    fp.appendChild(wpEl);
+  }
+
+  const raw = new XMLSerializer().serializeToString(doc);
+  const pretty = prettyXmlString(raw);
+  return withXmlDeclaration(pretty);
+}
+
+function buildPlnIniFromRfs(rfsPack, state){
+  const dep = String(state.dep||"").trim();
+  const arr = String(state.arr||"").trim();
+  const title = (String(state.title||"").trim() || `${dep} to ${arr}`);
+  const descr = (String(state.descr||"").trim() || `${dep}, ${arr}`);
+  const fp_type = state.fp_type;
+
+  const routetype = (state.route_type === "LowAlt") ? 2 : 3;
+  const cruise_ft = parseInt(state.cruise_ft,10);
+
+  const pts = extractRoutePointsFromRfsPoints(rfsPack.points);
+  if(!pts.length) throw new Error("No usable route points found in RFS (coords missing or only runway points).");
+
+  const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = (pts[0].alt_m ?? 0.0);
+  const arr_lat = pts[pts.length-1].lat, arr_lon = pts[pts.length-1].lon, arr_alt_m = (pts[pts.length-1].alt_m ?? 0.0);
+
+  const dep_name = (String(state.dep_name||"").trim() || dep);
+  const arr_name = (String(state.arr_name||"").trim() || arr);
+
+  const lines=[];
+  lines.push("[flightplan]");
+  lines.push(`title=${title}`);
+  lines.push(`description=${descr}`);
+  lines.push(`type=${fp_type}`);
+  lines.push(`routetype=${routetype}`);
+  lines.push(`cruising_altitude=${String(cruise_ft).padStart(5,"0")}`);
+  lines.push(`departure_id=${dep}, ${toIniCoordStr(dep_lat, dep_lon, dep_alt_m)}`);
+  lines.push(`destination_id=${arr}, ${toIniCoordStr(arr_lat, arr_lon, arr_alt_m)}`);
+  lines.push(`departure_name=${dep_name}`);
+  lines.push(`destination_name=${arr_name}`);
+
+  for(let i=0;i<pts.length;i++){
+    const p = pts[i];
+    const isFirst = (i===0);
+    const isLast = (i===pts.length-1);
+    let ident, tletter;
+    if(isFirst){ ident=dep; tletter="A"; }
+    else if(isLast){ ident=arr; tletter="A"; }
+    else{
+      ident = String(p.ident || `WP${i}`).trim() || `WP${i}`;
+      tletter = /^[A-Z]{3}$/.test(ident) ? "V" : "U";
+    }
+    const coordStr = toIniCoordStr(p.lat, p.lon, (p.alt_m ?? feetToM(cruise_ft)));
+    lines.push(`waypoint.${i}=${ident}, ${tletter}, ${coordStr},`);
+  }
+  return lines.join("\n");
+}
+
+/* ============================================================
+   8) UI renderer
+   ============================================================ */
+function el(tag, attrs={}, children=[]){
+  const e = document.createElement(tag);
+  for(const [k,v] of Object.entries(attrs)){
+    if(k==="class") e.className = v;
+    else if(k==="html") e.innerHTML = v;
+    else if(k.startsWith("on") && typeof v==="function") e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for(const c of children){
+    if(c==null) continue;
+    if(typeof c === "string") e.appendChild(document.createTextNode(c));
+    else e.appendChild(c);
+  }
+  return e;
+}
+
+function makeTabs(tabNames){
+  const tabs = el("div",{class:"tabs"});
+  const bar = el("div",{class:"tabbar"});
+  const panels = tabNames.map(()=>el("div",{class:"tabpanel"}));
+  tabNames.forEach((name,i)=>{
+    const b = el("button",{html:escapeHtml(name)});
+    b.addEventListener("click", ()=>{
+      Array.from(bar.children).forEach(x=>x.classList.remove("active"));
+      panels.forEach(p=>p.classList.remove("active"));
+      b.classList.add("active");
+      panels[i].classList.add("active");
+    });
+    bar.appendChild(b);
+  });
+  tabs.appendChild(bar);
+  panels.forEach(p=>tabs.appendChild(p));
+  bar.children[0].classList.add("active");
+  panels[0].classList.add("active");
+  return {tabs, panels};
+}
+
+function fieldText(label, key, state, opts={}){
+  const input = el("input",{type:"text", value: state[key] ?? "", placeholder: opts.placeholder ?? ""});
+  input.addEventListener("input", ()=>{ state[key]=input.value; });
+  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), input]), input};
+}
+function fieldNumber(label, key, state, opts={}){
+  const input = el("input",{type:"number", value: state[key], min: opts.min, max: opts.max, step: opts.step ?? "1"});
+  input.addEventListener("input", ()=>{ state[key]=input.value; });
+  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), input]), input};
+}
+function fieldSelect(label, key, state, options, opts={}){
+  const select = el("select",{});
+  options.forEach(o=>{
+    const opt = el("option",{value:o, html:escapeHtml(o)});
+    select.appendChild(opt);
+  });
+  select.value = state[key];
+  select.addEventListener("change", ()=>{ state[key]=select.value; opts.onChange?.(select.value, select); });
+  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), select]), select};
+}
+function fieldCheckbox(label, key, state, opts={}){
+  const input = el("input",{type:"checkbox"});
+  input.checked = Boolean(state[key]);
+  input.addEventListener("change", ()=>{ state[key]=input.checked; opts.onChange?.(input.checked, input); });
+  const row = el("div",{class:"inline"},[
+    input,
+    el("span",{html:`<strong>${escapeHtml(label)}</strong>`})
+  ]);
+  return {wrap: el("div",{class:"field "+(opts.className||"")},[row]), input};
+}
+function fieldRange(label, key, state, opts={}){
+  const range = el("input",{type:"range", min:opts.min, max:opts.max, step:opts.step ?? "1", value: state[key]});
+  const valueSpan = el("span",{class:"pill", html: escapeHtml(String(state[key]))});
+  range.addEventListener("input", ()=>{
+    state[key]=Number(range.value);
+    valueSpan.textContent = String(state[key]);
+    opts.onInput?.(state[key], range);
+  });
+  const top = el("div",{class:"inline"},[
+    el("span",{html:`<strong>${escapeHtml(label)}</strong>`}),
+    valueSpan
+  ]);
+  return {wrap: el("div",{class:"field "+(opts.className||"")},[top, range]), range, valueSpan};
+}
+
+/* ============================================================
+   9) App state + output/download
+   ============================================================ */
+let lastOutput = { text:"", filename:"output.txt", mime:"text/plain" };
+
+function makeSafeBaseName(s){
+  const t = String(s||"").trim().replace(/[\\\/:*?"<>|]+/g,"-");
+  return (t.length ? t : "route");
+}
+function computeOutFilename(kind, dep, arr){
+  const base = `${makeSafeBaseName(dep)}-${makeSafeBaseName(arr)}`.replace(/\s+/g,"_");
+  if(kind === "RFS") return `${base}.rfs`;
+  if(kind === "PLN_XML") return `${base}.pln`;
+  if(kind === "PLN_INI") return `${base}.pln`;
+  return `${base}.txt`;
+}
+
+function showOutput(text, kindLabel, hint, filename, mime){
+  const outArea = document.getElementById("outputArea");
+  outArea.classList.remove("hidden");
+  document.getElementById("outKind").textContent = kindLabel;
+  document.getElementById("outputBox").value = text;
+  document.getElementById("outHint").textContent = hint || "";
+
+  lastOutput = {
+    text,
+    filename: filename || "output.txt",
+    mime: mime || "text/plain"
+  };
+  document.getElementById("outFileName").textContent = lastOutput.filename;
+}
+
+function hideOutput(){
+  document.getElementById("outputArea").classList.add("hidden");
+  document.getElementById("outputBox").value = "";
+  document.getElementById("outKind").textContent = "—";
+  document.getElementById("outHint").textContent = "";
+  document.getElementById("outFileName").textContent = "—";
+  lastOutput = { text:"", filename:"output.txt", mime:"text/plain" };
+}
+
+/* ============================================================
+   11) Render UIs
+   ============================================================ */
+function renderPlnToRfsUi(pln){
+  const uiArea = document.getElementById("uiArea");
+  uiArea.innerHTML = "";
+  uiArea.classList.remove("hidden");
+  hideOutput();
+
+  const state = {
+    title: pln.title || "",
+    descr: pln.descr || "",
+    tags: "",
+
+    dt_mode: "CUSTOM",
+    custom_iso: nowUtcIso(),
+
+    liv_aircraft_id: "A320N",
+    liv_id: "DEFAULT",
+    liv_name: "DEFAULT",
+    liv_by: "Rortos",
+    liv_ver: 2,
+    liv_type: 0,
+    liv_date: 1600387200,
+    liv_fav: false,
+
+    fuel_pct: 37,
+    pax: 139,
+    cargo_kg: 9205,
+    pro_needed: true,
+
+    dep: (pln.departure || "").trim(),
+    arr: (pln.destination || "").trim(),
+    to_rwy: (pln.to_rwy_hint || "").trim(),
+    ld_rwy: (pln.ld_rwy_hint || "").trim(),
+
+    start_pos: "GATE",
+    spawn_id: "0",
+    arr_parking: "0",
+    seed: "",
+
+    metar_mode: "CUSTOM",
+    weather: "CLEAR",
+    wind_dir: 98,
+    wind_spd: 25,
+    fog_pct: 15,
+    snow_cov: "NONE",
+    temp_c: 16,
+    clouds: "NO SIGNIFICANT CLOUD",
+    cloud_base_ft: 22565,
+    turb_pct: 67,
+    qnh: 1013,
+    vis_m: 9999,
+
+    cruise_ft: (pln.cruise_ft!=null ? Number(pln.cruise_ft) : 12000)
+  };
+
+  const {tabs, panels} = makeTabs(["GENERAL","DATE/TIME","AIRCRAFT","FLIGHT PLAN","METAR"]);
+  uiArea.appendChild(tabs);
+
+  // GENERAL
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldText("TITLE","title",state,{className:"full"}).wrap);
+    g.appendChild(fieldText("DESCR","descr",state,{className:"full"}).wrap);
+    g.appendChild(fieldText("TAGS","tags",state,{className:"full"}).wrap);
+    panels[0].appendChild(g);
+  }
+
+  // DATE/TIME
+  {
+    const g = el("div",{class:"grid"});
+    const dt = fieldSelect("DATE/TIME","dt_mode",state,["CUSTOM","REAL"],{
+      className:"small",
+      onChange:(v)=>{
+        isoInput.input.disabled = (v==="REAL");
+        if(v==="REAL") state.custom_iso = nowUtcIso();
+      }
+    });
+    const isoInput = fieldText("UTC ISO","custom_iso",state,{className:"full"});
+    isoInput.input.disabled = false;
+    g.appendChild(dt.wrap); g.appendChild(isoInput.wrap);
+    panels[1].appendChild(g);
+  }
+
+  // AIRCRAFT
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldText("AircraftID","liv_aircraft_id",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("LIV ID","liv_id",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("LIV NAME","liv_name",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("LIV BY","liv_by",state,{className:"small"}).wrap);
+    g.appendChild(fieldNumber("Version","liv_ver",state,{className:"tiny", min:0, max:9999}).wrap);
+    g.appendChild(fieldNumber("Type","liv_type",state,{className:"tiny", min:0, max:50}).wrap);
+    g.appendChild(fieldNumber("Date(unix)","liv_date",state,{className:"small", min:0, max:2147483647}).wrap);
+    g.appendChild(fieldCheckbox("IsFavorite","liv_fav",state,{className:"small"}).wrap);
+
+    g.appendChild(fieldRange("FUEL %","fuel_pct",state,{className:"full", min:0, max:100}).wrap);
+    g.appendChild(fieldRange("PAX","pax",state,{className:"full", min:0, max:800}).wrap);
+    g.appendChild(fieldRange("CARGO kg","cargo_kg",state,{className:"full", min:0, max:200000, step:1}).wrap);
+    g.appendChild(fieldCheckbox("ProNeeded","pro_needed",state,{className:"small"}).wrap);
+    g.appendChild(fieldRange("Cruise ft","cruise_ft",state,{className:"full", min:0, max:45000, step:1}).wrap);
+
+    panels[2].appendChild(g);
+  }
+
+  // FLIGHT PLAN
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldText("DEP","dep",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("ARR","arr",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("TO RWY","to_rwy",state,{className:"small", placeholder:"e.g. 07L"}).wrap);
+    g.appendChild(fieldText("LD RWY","ld_rwy",state,{className:"small", placeholder:"e.g. 26L"}).wrap);
+    g.appendChild(fieldSelect("START","start_pos",state,["GATE","RUNWAY"],{className:"small"}).wrap);
+    g.appendChild(fieldText("SpawnPoint ID","spawn_id",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("ARR ParkingPoint","arr_parking",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("Seed","seed",state,{className:"small", placeholder:"empty=auto"}).wrap);
+
+    g.appendChild(el("div",{class:"field full", html:`<label>Tip</label><div class="inline">Leave SpawnPoint ID / ARR ParkingPoint as <strong>0</strong> to use default.</div>`}));
+    panels[3].appendChild(g);
+  }
+
+  // METAR
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldSelect("METAR","metar_mode",state,["CUSTOM","REAL","RANDOM"],{className:"small"}).wrap);
+
+    const weather = fieldSelect("WEATHER","weather",state,["CLEAR","FOG","SNOW","RAIN","STORM"],{
+      className:"small",
+      onChange:()=>{
+        enforceWeatherConstraints(state, {fog_pct:fog.range, clouds:cloud.select, turb_pct:turb.range});
+        fog.range.value = state.fog_pct;
+        fog.valueSpan.textContent = String(state.fog_pct);
+        cloud.select.value = state.clouds;
+      }
+    });
+    g.appendChild(weather.wrap);
+
+    const windDir = fieldRange("WIND DIR","wind_dir",state,{className:"full", min:0, max:359});
+    const windSpd = fieldRange("WIND SPD","wind_spd",state,{className:"full", min:0, max:40});
+    g.appendChild(windDir.wrap); g.appendChild(windSpd.wrap);
+
+    const temp = fieldRange("TEMP °C","temp_c",state,{className:"full", min:-30, max:40});
+    const qnh = fieldRange("QNH","qnh",state,{className:"full", min:900, max:1100});
+    const vis = fieldRange("VIS m","vis_m",state,{className:"full", min:1000, max:9999});
+    g.appendChild(temp.wrap); g.appendChild(qnh.wrap); g.appendChild(vis.wrap);
+
+    const fog = fieldRange("FOG %","fog_pct",state,{className:"full", min:0, max:100});
+    const snow = fieldSelect("SNOW","snow_cov",state,["NONE","LOW","MEDIUM","HIGH"],{className:"small"});
+    g.appendChild(fog.wrap); g.appendChild(snow.wrap);
+
+    const cloud = fieldSelect("CLOUDS","clouds",state,["NO SIGNIFICANT CLOUD","FEW CLOUDS","SCATTERED CLOUDS","BROKEN CLOUDS","OVERCAST"],{className:"full"});
+    g.appendChild(cloud.wrap);
+
+    const base = fieldRange("BASE ft","cloud_base_ft",state,{className:"full", min:4500, max:45000});
+    const turb = fieldRange("TURB %","turb_pct",state,{className:"full", min:0, max:100});
+    g.appendChild(base.wrap); g.appendChild(turb.wrap);
+
+    g.appendChild(el("div",{class:"field full", html:`<label>Constraints</label><div class="inline">CLEAR locks fog=0; non-CLEAR forces clouds=OVERCAST and fog≥5; STORM locks turbulence slider.</div>`}));
+
+    enforceWeatherConstraints(state, {fog_pct:fog.range, clouds:cloud.select, turb_pct:turb.range});
+    fog.range.value = state.fog_pct; fog.valueSpan.textContent = String(state.fog_pct);
+    cloud.select.value = state.clouds;
+
+    panels[4].appendChild(g);
+  }
+
+  const btnGen = el("button",{class:"btn success", html:"Generate RFS"});
+  btnGen.addEventListener("click", ()=>{
+    try{
+      const {rfs, notes} = buildRfsFromPln(pln, state);
+      const s = JSON.stringify(rfs);
+      const lines = [
+        `✅ Generated RFS.`,
+        ...(notes.length ? ["⚠ Notes:", ...notes.map(n=>`- ${n}`)] : [])
+      ];
+      setStatus(lines);
+
+      const fn = computeOutFilename("RFS", state.dep, state.arr);
+      showOutput(s, "RFS JSON", "Download will save as .rfs", fn, "application/json");
+    }catch(e){
+      setStatus([`❌ Error: ${e.message || e}`]);
+      hideOutput();
+    }
+  });
+
+  uiArea.appendChild(el("div",{style:"margin-top:12px"},[btnGen]));
+}
+
+function renderRfsToPlnUi(rfsPack){
+  const uiArea = document.getElementById("uiArea");
+  uiArea.innerHTML = "";
+  uiArea.classList.remove("hidden");
+  hideOutput();
+
+  const routePts = extractRoutePointsFromRfsPoints(rfsPack.points);
+  let cruiseGuess = 12000;
+  if(routePts.length){
+    const alts = routePts.map(p=>p.alt_m).filter(v=>v!=null).sort((a,b)=>a-b);
+    if(alts.length){
+      const mid = alts[Math.floor(alts.length/2)];
+      cruiseGuess = Math.round(mToFeet(mid));
+    }
+  }
+
+  const state = {
+    out_kind: "XML (advanced)",
+    title: (rfsPack.rfs.Title || `${rfsPack.dep} to ${rfsPack.arr}`),
+    descr: (rfsPack.rfs.Description || ""),
+    fp_type: "IFR",
+    route_type: "LowAlt",
+
+    dep: rfsPack.dep || "",
+    arr: rfsPack.arr || "",
+    to_rwy: rfsPack.to_rwy || "",
+    ld_rwy: rfsPack.ld_rwy || "",
+
+    dep_name: "",
+    arr_name: "",
+
+    cruise_ft: cruiseGuess,
+    include_rwy: true
+  };
+
+  const {tabs, panels} = makeTabs(["PLN META","AIRPORT / RWY"]);
+  uiArea.appendChild(tabs);
+
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldSelect("OUT","out_kind",state,["XML (advanced)","INI (legacy)"],{className:"small"}).wrap);
+    g.appendChild(fieldSelect("FPType","fp_type",state,["IFR","VFR"],{className:"tiny"}).wrap);
+    g.appendChild(fieldSelect("RouteType","route_type",state,["LowAlt","HighAlt"],{className:"tiny"}).wrap);
+    g.appendChild(fieldText("Title","title",state,{className:"full"}).wrap);
+    g.appendChild(fieldText("Descr","descr",state,{className:"full"}).wrap);
+    panels[0].appendChild(g);
+  }
+
+  {
+    const g = el("div",{class:"grid"});
+    g.appendChild(fieldText("DEP","dep",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("ARR","arr",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("TO RWY","to_rwy",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("LD RWY","ld_rwy",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("DEP Name","dep_name",state,{className:"small"}).wrap);
+    g.appendChild(fieldText("ARR Name","arr_name",state,{className:"small"}).wrap);
+    g.appendChild(fieldRange("Cruise ft","cruise_ft",state,{className:"full", min:0, max:45000}).wrap);
+    g.appendChild(fieldCheckbox("Include RunwayNumberFP in XML","include_rwy",state,{className:"small"}).wrap);
+    panels[1].appendChild(g);
+  }
+
+  const btnGen = el("button",{class:"btn success", html:"Generate PLN"});
+  btnGen.addEventListener("click", ()=>{
+    try{
+      let outText="", kindLabel="", kindKey="", mime="text/plain";
+      if(String(state.out_kind).startsWith("XML")){
+        outText = buildPlnXmlFromRfs(rfsPack, state);
+        kindLabel = "PLN XML (AceXML)";
+        kindKey = "PLN_XML";
+        mime = "application/xml";
+        setStatus([`✅ Output: XML PLN (AceXML)`]);
+      }else{
+        outText = buildPlnIniFromRfs(rfsPack, state);
+        kindLabel = "PLN INI ([flightplan])";
+        kindKey = "PLN_INI";
+        mime = "text/plain";
+        setStatus([`✅ Output: INI PLN ([flightplan])`]);
+      }
+
+      const fn = computeOutFilename(kindKey, state.dep, state.arr);
+      showOutput(outText, kindLabel, "Download will save as .pln", fn, mime);
+    }catch(e){
+      setStatus([`❌ Error: ${e.message || e}`]);
+      hideOutput();
+    }
+  });
+
+  uiArea.appendChild(el("div",{style:"margin-top:12px"},[btnGen]));
+}
+
+/* ============================================================
+   12) Core loader (used by button & drag-drop)
+   ============================================================ */
+function loadFromText(txt){
+  hideOutput();
+  const kind = detectInputKind(txt);
+  if(!kind){
+    setStatus(["❌ Could not detect input kind. Paste or drop PLN XML/INI or RFS JSON."]);
+    document.getElementById("uiArea").classList.add("hidden");
+    return;
+  }
+  try{
+    if(kind==="PLN"){
+      const pln = parsePlnAny(txt);
+      const missing = pln.waypoints.filter(w=>w.lat==null || w.lon==null).length;
+      const lines = [
+        `✅ Detected PLN (${pln.format}): ${pln.departure} -> ${pln.destination} | waypoints: ${pln.waypoints.length}`,
+      ];
+      if(missing) lines.push(`⚠ Missing coords waypoints: ${missing} (they will be dropped)`);
+      setStatus(lines);
+      renderPlnToRfsUi(pln);
+    }else{
+      const rfsPack = parseRfsJson(txt);
+      setStatus([`✅ Detected RFS: ${rfsPack.dep} -> ${rfsPack.arr} | FPPoints: ${rfsPack.points.length}`]);
+      renderRfsToPlnUi(rfsPack);
+    }
+  }catch(e){
+    setStatus([`❌ Failed to parse as ${kind}: ${e.message || e}`]);
+    document.getElementById("uiArea").classList.add("hidden");
+  }
+}
+
+/* ============================================================
+   13) Wire buttons + download
+   ============================================================ */
+document.getElementById("btnLoad").addEventListener("click", ()=>{
+  const txt = document.getElementById("inputBox").value.trim();
+  if(!txt){
+    setStatus(["❌ Empty input."]);
+    document.getElementById("uiArea").classList.add("hidden");
+    return;
+  }
+  loadFromText(txt);
+});
+
+document.getElementById("btnClear").addEventListener("click", ()=>{
+  document.getElementById("inputBox").value = "";
+  document.getElementById("uiArea").classList.add("hidden");
+  hideOutput();
+  setStatus(["Ready."]);
+});
+
+document.getElementById("btnCopy").addEventListener("click", async ()=>{
+  const text = document.getElementById("outputBox").value;
+  try{
+    await navigator.clipboard.writeText(text);
+    setStatus(["✅ Output copied to clipboard."]);
+  }catch(e){
+    const ta = document.getElementById("outputBox");
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    setStatus(["✅ Output copied (fallback)."]);
+  }
+});
+
+document.getElementById("btnDownload").addEventListener("click", ()=>{
+  if(!lastOutput.text){
+    setStatus(["❌ Nothing to download. Generate output first."]);
+    return;
+  }
+  const blob = new Blob([lastOutput.text], {type:lastOutput.mime || "text/plain"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = lastOutput.filename || "output.txt";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  setStatus([`✅ Downloaded: ${lastOutput.filename}`]);
+});
+
+/* ============================================================
+   14) Drag & drop integration
+   ============================================================ */
+// Prevent the browser from navigating away when dropping a file anywhere.
+["dragenter","dragover","dragleave","drop"].forEach(evt=>{
+  window.addEventListener(evt, (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+  }, {passive:false});
+});
+
+const inputBox = document.getElementById("inputBox");
+
+inputBox.addEventListener("dragenter", (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  inputBox.classList.add("drop-active");
+});
+inputBox.addEventListener("dragover", (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  inputBox.classList.add("drop-active");
+});
+inputBox.addEventListener("dragleave", (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  inputBox.classList.remove("drop-active");
+});
+inputBox.addEventListener("drop", async (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  inputBox.classList.remove("drop-active");
+
+  const dt = e.dataTransfer;
+  if(!dt || !dt.files || !dt.files.length){
+    setStatus(["❌ Drop has no files."]);
+    return;
+  }
+
+  const file = dt.files[0];
+  if(!looksLikeTextFile(file)){
+    setStatus([`❌ Unsupported file type: ${file.name || "(unnamed)"}`]);
+    return;
+  }
+
+  try{
+    const text = await readFileAsText(file);
+    inputBox.value = text;
+
+    setStatus([`✅ Loaded file into input: ${file.name}`, "Now click Load Input (or it will auto-load in 0.2s)."]);
+    // Auto-load shortly (so user sees it filled)
+    setTimeout(()=>loadFromText(text), 200);
+  }catch(err){
+    setStatus([`❌ Failed to read file: ${err?.message || err}`]);
+  }
+});
+</script>
+</body>
+</html>

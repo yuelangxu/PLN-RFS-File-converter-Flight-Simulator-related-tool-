@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>PLN ↔ RFS Converter (Offline)</title>
+  <title>PLN ⇄ RFS ⇄ KML · Offline Converter (Professional)</title>
   <style>
+    /* Dark theme – fully preserved original visual design */
     :root{
       --bg:#0b0f14;
       --panel:#121924;
@@ -164,9 +165,7 @@
       background:rgba(255,255,255,0.04);
       font-family:var(--mono);font-size:11px;color:var(--muted)
     }
-    .output{
-      margin-top:14px;
-    }
+    .output{margin-top:14px;}
     .output textarea{min-height:260px}
     .footer-note{margin-top:8px;color:var(--muted);font-size:12px}
     .hidden{display:none!important}
@@ -175,6 +174,7 @@
       color:var(--muted);
       font-size:12px;
     }
+    .mono{font-family:var(--mono)}
   </style>
 </head>
 <body>
@@ -182,8 +182,10 @@
   <div class="card">
     <div class="header">
       <div>
-        <h1>PLN ↔ RFS Converter (Offline, Browser-only)</h1>
-        <div class="hint">Paste PLN XML/INI or RFS JSON → Load → adjust settings → Generate. Also supports drag & drop into the input box.</div>
+        <h1>✈ PLN ⇄ RFS ⇄ KML · Professional Offline Converter</h1>
+        <div class="hint">
+          Drag / paste <span class="pill">.pln</span> <span class="pill">.rfs</span> <span class="pill">.kml</span> etc. → auto‑detect → smart default format → tune → generate
+        </div>
       </div>
       <div class="row">
         <button id="btnLoad" class="btn primary">Load Input</button>
@@ -191,15 +193,15 @@
       </div>
     </div>
     <div class="content">
-      <textarea id="inputBox" placeholder="Paste PLN XML/INI or RFS JSON here... (or drag a .pln / .rfs / .txt file into this box)"></textarea>
-      <div class="drop-tip">Tip: drag a <span class="pill">.pln</span> / <span class="pill">.rfs</span> / <span class="pill">.txt</span> file into the box. We prevent the browser from navigating away.</div>
+      <textarea id="inputBox" placeholder="Paste PLN / RFS / KML content, or drop a file here"></textarea>
+      <div class="drop-tip">✅ Default drag‑behaviour prevented – safe offline use</div>
 
       <div id="status" class="status">Ready.</div>
 
-      <!-- Dynamic UI -->
+      <!-- dynamic configuration panel (filled after successful parse) -->
       <div id="uiArea" class="hidden"></div>
 
-      <!-- Output -->
+      <!-- output panel -->
       <div class="output hidden" id="outputArea">
         <div class="row" style="justify-content:space-between; align-items:center;">
           <div class="inline">
@@ -208,8 +210,8 @@
             <span class="pill" id="outFileName">—</span>
           </div>
           <div class="row">
-            <button id="btnCopy" class="btn">Copy Output</button>
-            <button id="btnDownload" class="btn primary">Download</button>
+            <button id="btnCopy" class="btn">📋 Copy</button>
+            <button id="btnDownload" class="btn primary">⬇ Download</button>
           </div>
         </div>
         <textarea id="outputBox" readonly></textarea>
@@ -220,1495 +222,1589 @@
 </div>
 
 <script>
-/* ============================================================
-   0) Small utils
-   ============================================================ */
-function nowUtcIso(){
-  const d = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  const yyyy = d.getUTCFullYear();
-  const mm = pad(d.getUTCMonth()+1);
-  const dd = pad(d.getUTCDate());
-  const hh = pad(d.getUTCHours());
-  const mi = pad(d.getUTCMinutes());
-  const ss = pad(d.getUTCSeconds());
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
-}
-const feetToM = ft => Number(ft) * 0.3048;
-const mToFeet = m => Number(m) / 0.3048;
-const clamp = (x,lo,hi)=>Math.max(lo, Math.min(hi, Number(x)));
-const clamp01 = x => clamp(x,0,1);
+/* ==========================================================================
+   Professional offline flight plan converter · fully refactored
+   - IIFE, zero global pollution
+   - semantic constants, no magic numbers
+   - smart default output format (based on input)
+   - XML pretty‑print performance guard (>800 lines skip)
+   - UI/state synchronisation fixed (badge update on target change)
+   - extended coordinate parser (supports N50°30.5' etc.)
+   - core parsing/building logic fully preserved, robustness increased
+   ========================================================================== */
+(function(){
+  "use strict";
 
-function setStatus(lines){
-  const el = document.getElementById('status');
-  el.innerHTML = lines.map(s=>{
-    if(s.startsWith("✅")) return `<span class="ok">${escapeHtml(s)}</span>`;
-    if(s.startsWith("⚠")) return `<span class="warn">${escapeHtml(s)}</span>`;
-    if(s.startsWith("❌")) return `<span class="err">${escapeHtml(s)}</span>`;
-    return escapeHtml(s);
-  }).join("\n");
-}
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
-}
-
-/* ============================================================
-   0.5) Drag & Drop helpers (prevent navigation)
-   ============================================================ */
-function looksLikeTextFile(file){
-  const name = (file?.name || "").toLowerCase();
-  if(name.endsWith(".pln") || name.endsWith(".rfs") || name.endsWith(".txt") || name.endsWith(".json") || name.endsWith(".xml") || name.endsWith(".ini")) return true;
-  // Some browsers provide type="", treat unknown as potential text
-  return (file?.type || "").startsWith("text/") || file?.type === "application/json" || file?.type === "application/xml" || file?.type === "";
-}
-async function readFileAsText(file){
-  // Modern browsers: file.text()
-  return await file.text();
-}
-
-/* ============================================================
-   1) Robust coordinate parsing
-   ============================================================ */
-function normaliseQuotesAndSeparators(s){
-  s = (s ?? "").trim();
-  s = s.replaceAll("′","'").replaceAll("″",'"')
-       .replaceAll("“",'"').replaceAll("”",'"')
-       .replaceAll("’","'");
-  s = s.replace(/\s*,\s*/g, ",");
-  s = s.replace(/\s+/g, " ");
-  return s;
-}
-
-function parseWorldPosition(wpStr){
-  const s = normaliseQuotesAndSeparators(wpStr);
-  const parts = s.split(",").map(x=>x.trim());
-  if(parts.length !== 3) throw new Error(`WorldPosition format unexpected: ${wpStr}`);
-  const [latS, lonS, altS] = parts;
-
-  const dmsToDec = (s1)=>{
-    const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:°|deg)\s*(\d+)\s*['’]\s*([\d.]+)\s*["]$/);
-    if(!m) return null;
-    const hemi = m[1];
-    const deg = Number(m[2]), minute = Number(m[3]), sec = Number(m[4]);
-    let dec = deg + minute/60 + sec/3600;
-    if(hemi === "S" || hemi === "W") dec = -dec;
-    return dec;
-  };
-  const dmToDec = (s1)=>{
-    const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:\*|°|deg)\s*([\d.]+)\s*['’]$/);
-    if(!m) return null;
-    const hemi = m[1];
-    const deg = Number(m[2]), minute = Number(m[3]);
-    let dec = deg + minute/60;
-    if(hemi === "S" || hemi === "W") dec = -dec;
-    return dec;
+  /* ------------------------------------------------------------------------
+     0. CONSTANTS – all semantic, no magic numbers
+  ------------------------------------------------------------------------ */
+  const CONST = {
+    UNITS: {
+      FEET_TO_M: 0.3048,
+      M_TO_FEET: 1 / 0.3048
+    },
+    RFS: {
+      WAYPOINT_TYPE: {
+        GPS_WP: 13,
+        RUNWAY: 25
+      },
+      ICON_ID: {
+        GPS_WP: 1,
+        RUNWAY: 7
+      },
+      WEATHER: { CLEAR:0, FOG:1, RAIN:2, SNOW:3, STORM:4 },
+      CLOUD: {
+        "NO SIGNIFICANT CLOUD":0,
+        "FEW CLOUDS":1,
+        "SCATTERED CLOUDS":2,
+        "BROKEN CLOUDS":3,
+        "OVERCAST":4
+      },
+      SNOW_COVER: { NONE:0, LOW:1, MEDIUM:2, HIGH:3 },
+      METAR_MODE: { CUSTOM:0, REAL:1, RANDOM:2 }
+    },
+    KML: {
+      MAX_ALT_CLAMP: 15000,
+      TOC_TOD_THRESHOLD_RATIO: 0.02,
+      TOC_TOD_MIN_FT: 150,
+      DEFAULT_PRECISION: 6
+    },
+    PLN: {
+      INI_ROUTETYPE: { LowAlt:2, HighAlt:3 },
+      CRUISE_ALT_PAD: 5
+    },
+    XML_PRETTY: {
+      MAX_LINES: 800,
+      INDENT: "  "
+    },
+    UI: {
+      TARGETS: [
+        "— Select target format —",
+        "RFS (.rfs)",
+        "PLN XML (.pln)",
+        "PLN INI (.pln)",
+        "KML File -- RFS Supported (.kml)",
+        "KML File -- GIS Software Supported (.kml)"
+      ]
+    }
   };
 
-  const lat = dmsToDec(latS) ?? dmToDec(latS);
-  const lon = dmsToDec(lonS) ?? dmToDec(lonS);
-  if(lat === null || lon === null) throw new Error(`DMS/DM parse failed: ${wpStr}`);
+  /* ------------------------------------------------------------------------
+     1. General utilities – pure, no globals
+  ------------------------------------------------------------------------ */
+  const nowUtcIso = () => {
+    const d = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  };
+  const feetToM = ft => Number(ft) * CONST.UNITS.FEET_TO_M;
+  const mToFeet = m => Number(m) * CONST.UNITS.M_TO_FEET;
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, Number(x)));
+  const clamp01 = x => clamp(x, 0, 1);
+  const escapeHtml = s => String(s).replace(/[&<>"']/g, 
+    c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":"&#039;" })[c]);
+  const isFiniteNumber = n => Number.isFinite(Number(n));
+  
+  const setStatus = (lines) => {
+    const el = document.getElementById('status');
+    el.innerHTML = lines.map(s => {
+      if(s.startsWith("✅")) return `<span class="ok">${escapeHtml(s)}</span>`;
+      if(s.startsWith("⚠")) return `<span class="warn">${escapeHtml(s)}</span>`;
+      if(s.startsWith("❌")) return `<span class="err">${escapeHtml(s)}</span>`;
+      return escapeHtml(s);
+    }).join("\n");
+  };
 
-  const altFt = Number(String(altS).replace("+",""));
-  const altM = feetToM(altFt);
-  return {lat, lon, alt_m: altM};
-}
+  const makeSafeBaseName = s => (String(s||"").trim().replace(/[\\/:*?"<>|]+/g, '-') || "route");
+  const computeOutFilename = (kind, dep, arr) => {
+    const base = `${makeSafeBaseName(dep)}-${makeSafeBaseName(arr)}`.replace(/\s+/g, '_');
+    if(kind === 'RFS') return `${base}.rfs`;
+    if(kind === 'PLN_XML' || kind === 'PLN_INI') return `${base}.pln`;
+    if(kind === 'KML_RFS' || kind === 'KML_GIS') return `${base}.kml`;
+    return `${base}.txt`;
+  };
 
-function tryExtractCoordFromTokens(tokens){
-  if(!tokens || !tokens.length) return null;
-  let idx = null;
-  for(let i=0;i<tokens.length;i++){
-    const tt = tokens[i].trim();
-    if(/^[NS]\s*\d+/.test(tt)){ idx = i; break; }
-  }
-  if(idx === null || idx+2 >= tokens.length) return null;
-  const latS = tokens[idx].trim(), lonS = tokens[idx+1].trim(), altS = tokens[idx+2].trim();
-  try{
-    return parseWorldPosition(`${latS},${lonS},${altS}`);
-  }catch(_){
+  /* ------------------------------------------------------------------------
+     2. Coordinate parsing – tolerant, handles many malformed variants
+  ------------------------------------------------------------------------ */
+  const normaliseQuotesAndSeparators = s => {
+    s = (s ?? '').trim();
+    return s.replaceAll('′',"'").replaceAll('″','"')
+            .replaceAll('“','"').replaceAll('”','"')
+            .replaceAll('’',"'")
+            .replace(/\s*,\s*/g, ',')
+            .replace(/\s+/g, ' ');
+  };
+
+  const parseWorldPosition = (wpStr) => {
+    const s = normaliseQuotesAndSeparators(wpStr);
+    const parts = s.split(',').map(x=>x.trim());
+    if(parts.length !== 3) throw new Error(`WorldPosition format invalid: ${wpStr}`);
+    const [latS, lonS, altS] = parts;
+
+    const dmsToDec = (s1) => {
+      const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:°|deg)\s*(\d+)\s*['’]\s*([\d.]+)\s*["]$/);
+      if(!m) return null;
+      const hemi = m[1];
+      let dec = Number(m[2]) + Number(m[3])/60 + Number(m[4])/3600;
+      if(hemi === 'S' || hemi === 'W') dec = -dec;
+      return dec;
+    };
+    const dmToDec = (s1) => {
+      const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:\*|°|deg)\s*([\d.]+)\s*['’]$/);
+      if(!m) return null;
+      const hemi = m[1];
+      let dec = Number(m[2]) + Number(m[3])/60;
+      if(hemi === 'S' || hemi === 'W') dec = -dec;
+      return dec;
+    };
+    const dmDecimalToDec = (s1) => { // e.g. N50° 30.5'
+      const m = s1.match(/^([NSWE])\s*(\d+)\s*(?:°|deg)\s*([\d.]+)\s*['’]$/);
+      if(!m) return null;
+      const hemi = m[1];
+      let dec = Number(m[2]) + Number(m[3])/60;
+      if(hemi === 'S' || hemi === 'W') dec = -dec;
+      return dec;
+    };
+
+    const lat = dmsToDec(latS) ?? dmToDec(latS) ?? dmDecimalToDec(latS);
+    const lon = dmsToDec(lonS) ?? dmToDec(lonS) ?? dmDecimalToDec(lonS);
+    if(lat === null || lon === null) throw new Error(`Lat/Lon parse failed: ${wpStr}`);
+
+    const altFt = Number(String(altS).replace('+',''));
+    const altM = feetToM(altFt);
+    return { lat, lon, alt_m: altM };
+  };
+
+  const tryExtractCoordFromTokens = (tokens) => {
+    if(!tokens?.length) return null;
+    let idx = tokens.findIndex(t => /^[NS]\s*\d/.test(t.trim()));
+    if(idx === -1 || idx+2 >= tokens.length) return null;
+    try {
+      return parseWorldPosition(`${tokens[idx].trim()},${tokens[idx+1].trim()},${tokens[idx+2].trim()}`);
+    } catch {
+      return null;
+    }
+  };
+
+  /* ------------------------------------------------------------------------
+     3. PLN parser (XML / INI) – full capability preserved
+  ------------------------------------------------------------------------ */
+  const xmlFindText = (root, tagEnds) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    for(let node = walker.currentNode; node; node = walker.nextNode()) {
+      if(node.tagName?.endsWith(tagEnds)) return node.textContent ?? '';
+    }
     return null;
-  }
-}
+  };
 
-/* ============================================================
-   2) PLN parsing (XML + INI)
-   ============================================================ */
-function xmlFindText(root, tagEnds){
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-  let node = walker.currentNode;
-  while(node){
-    if(node.tagName && node.tagName.endsWith(tagEnds)){
-      return node.textContent ?? "";
+  const runwayDesignatorToLetter = s => {
+    if(!s) return '';
+    s = String(s).trim().toUpperCase();
+    if(s === 'LEFT' || s === 'L') return 'L';
+    if(s === 'RIGHT' || s === 'R') return 'R';
+    if(s === 'CENTER' || s === 'CENTRE' || s === 'C') return 'C';
+    return '';
+  };
+
+  const inferRwyFromWpXml = wpEl => {
+    let rwyNum = null, rwyDes = '';
+    for(const child of wpEl.children) {
+      if(child.tagName.endsWith('RunwayNumberFP')) {
+        const txt = (child.textContent ?? '').trim();
+        if(txt) rwyNum = txt;
+      } else if(child.tagName.endsWith('RunwayDesignatorFP')) {
+        rwyDes = runwayDesignatorToLetter(child.textContent ?? '');
+      }
     }
-    node = walker.nextNode();
-  }
-  return null;
-}
-
-function runwayDesignatorToLetter(s){
-  if(!s) return "";
-  s = String(s).trim().toUpperCase();
-  if(s === "LEFT" || s === "L") return "L";
-  if(s === "RIGHT" || s === "R") return "R";
-  if(s === "CENTER" || s === "CENTRE" || s === "C") return "C";
-  return "";
-}
-
-function inferRwyFromWpXml(wpEl){
-  let rwyNum = null;
-  let rwyDes = "";
-  for(const child of Array.from(wpEl.children)){
-    if(child.tagName.endsWith("RunwayNumberFP")){
-      const txt = (child.textContent ?? "").trim();
-      if(txt) rwyNum = txt;
-    }else if(child.tagName.endsWith("RunwayDesignatorFP")){
-      rwyDes = runwayDesignatorToLetter(child.textContent ?? "");
-    }
-  }
-  if(rwyNum){
-    try{
-      const n = parseInt(rwyNum,10);
-      rwyNum = String(n).padStart(2,"0");
-    }catch(_){
+    if(!rwyNum) return '';
+    try {
+      rwyNum = String(parseInt(rwyNum,10)).padStart(2,'0');
+    } catch {
       rwyNum = String(rwyNum).trim();
     }
     return `${rwyNum}${rwyDes}`;
-  }
-  return "";
-}
+  };
 
-function parsePlnXml(xmlText){
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xmlText, "application/xml");
-  const parseError = doc.querySelector("parsererror");
-  if(parseError) throw new Error("XML parse error (parsererror).");
+  const parsePlnXml = xmlText => {
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if(doc.querySelector('parsererror')) throw new Error('XML parse error');
+    const root = doc.documentElement;
 
-  const root = doc.documentElement;
-
-  const departure = (xmlFindText(root, "DepartureID") ?? "").trim();
-  const destination = (xmlFindText(root, "DestinationID") ?? "").trim();
-  const title = (xmlFindText(root, "Title") ?? `${departure} - ${destination}`).trim();
-  const descr = (xmlFindText(root, "Descr") ?? "").trim();
-
-  let cruiseFt = null;
-  const cruisingAlt = xmlFindText(root, "CruisingAlt");
-  if(cruisingAlt){
-    const v = Number(String(cruisingAlt).trim());
-    cruiseFt = Number.isFinite(v) ? v : null;
-  }
-
-  const depLLA = xmlFindText(root, "DepartureLLA");
-  const dstLLA = xmlFindText(root, "DestinationLLA");
-  let dep_lla = null, dst_lla = null;
-  if(depLLA && depLLA.trim()){
-    try{ dep_lla = parseWorldPosition(depLLA.trim()); }catch(_){ dep_lla = null; }
-  }
-  if(dstLLA && dstLLA.trim()){
-    try{ dst_lla = parseWorldPosition(dstLLA.trim()); }catch(_){ dst_lla = null; }
-  }
-
-  const waypoints = [];
-  const allWp = Array.from(root.getElementsByTagName("*")).filter(el=>el.tagName.endsWith("ATCWaypoint"));
-  for(const wp of allWp){
-    let wp_type="", ident="", region="", airway="";
-    let pos=null;
-    let alt1fp_ft=null;
-
-    if(wp.hasAttribute("id")){
-      const id = wp.getAttribute("id");
-      if(id) ident = id.trim();
+    const departure = (xmlFindText(root, 'DepartureID') ?? '').trim();
+    const destination = (xmlFindText(root, 'DestinationID') ?? '').trim();
+    const title = (xmlFindText(root, 'Title') ?? `${departure} - ${destination}`).trim();
+    const descr = (xmlFindText(root, 'Descr') ?? '').trim();
+    let cruiseFt = null;
+    const cruisingAlt = xmlFindText(root, 'CruisingAlt');
+    if(cruisingAlt) {
+      const v = Number(String(cruisingAlt).trim());
+      if(isFiniteNumber(v)) cruiseFt = v;
     }
 
-    const rwy_hint = inferRwyFromWpXml(wp);
+    const depLLA = xmlFindText(root, 'DepartureLLA');
+    const dstLLA = xmlFindText(root, 'DestinationLLA');
+    let dep_lla = null, dst_lla = null;
+    if(depLLA?.trim()) try { dep_lla = parseWorldPosition(depLLA.trim()); } catch {}
+    if(dstLLA?.trim()) try { dst_lla = parseWorldPosition(dstLLA.trim()); } catch {}
 
-    for(const child of Array.from(wp.children)){
-      if(child.tagName.endsWith("ATCWaypointType")){
-        wp_type = (child.textContent ?? "").trim();
-      }else if(child.tagName.endsWith("WorldPosition")){
-        pos = (child.textContent ?? "").trim();
-      }else if(child.tagName.endsWith("ATCAirway")){
-        airway = (child.textContent ?? "").trim();
-      }else if(child.tagName.endsWith("Alt1FP")){
-        const v = Number((child.textContent ?? "").trim());
-        alt1fp_ft = Number.isFinite(v) ? v : null;
-      }else if(child.tagName.endsWith("ICAO")){
-        for(const sub of Array.from(child.children)){
-          if(sub.tagName.endsWith("ICAOIdent")){
-            const icao_ident = (sub.textContent ?? "").trim();
-            if(icao_ident && !ident) ident = icao_ident;
-          }else if(sub.tagName.endsWith("ICAORegion")){
-            region = (sub.textContent ?? "").trim();
+    const waypoints = [];
+    const allWp = Array.from(root.getElementsByTagName('*')).filter(el => el.tagName.endsWith('ATCWaypoint'));
+    for(const wp of allWp) {
+      let wp_type='', ident='', region='', airway='', pos=null, alt1fp_ft=null;
+      if(wp.hasAttribute('id')) ident = (wp.getAttribute('id') ?? '').trim();
+      const rwy_hint = inferRwyFromWpXml(wp);
+
+      for(const child of wp.children) {
+        if(child.tagName.endsWith('ATCWaypointType')) wp_type = (child.textContent ?? '').trim();
+        else if(child.tagName.endsWith('WorldPosition')) pos = (child.textContent ?? '').trim();
+        else if(child.tagName.endsWith('ATCAirway')) airway = (child.textContent ?? '').trim();
+        else if(child.tagName.endsWith('Alt1FP')) {
+          const v = Number((child.textContent ?? '').trim());
+          if(isFiniteNumber(v)) alt1fp_ft = v;
+        } else if(child.tagName.endsWith('ICAO')) {
+          for(const sub of child.children) {
+            if(sub.tagName.endsWith('ICAOIdent')) {
+              const icao_ident = (sub.textContent ?? '').trim();
+              if(icao_ident && !ident) ident = icao_ident;
+            } else if(sub.tagName.endsWith('ICAORegion')) {
+              region = (sub.textContent ?? '').trim();
+            }
           }
         }
       }
+
+      let lat=null, lon=null, alt_m=null;
+      if(pos) try { const c = parseWorldPosition(pos); lat=c.lat; lon=c.lon; alt_m=c.alt_m; } catch {}
+      if(alt1fp_ft !== null) alt_m = feetToM(alt1fp_ft);
+      waypoints.push({ wp_type, ident, region, airway, lat, lon, alt_m, rwy_hint });
     }
 
-    let lat=null, lon=null, alt_m=null;
-    if(pos){
-      try{
-        const c = parseWorldPosition(pos);
-        lat=c.lat; lon=c.lon; alt_m=c.alt_m;
-      }catch(_){
-        lat=lon=alt_m=null;
-      }
-    }
-    if(alt1fp_ft !== null && alt1fp_ft !== undefined){
-      alt_m = feetToM(alt1fp_ft);
-    }
-
-    waypoints.push({wp_type, ident, region, airway, lat, lon, alt_m, rwy_hint});
-  }
-
-  // Infer runway hints from first/last Airport waypoint
-  let to_rwy_hint="", ld_rwy_hint="";
-  const firstAirport = waypoints.find(w=>String(w.wp_type||"").trim().toLowerCase()==="airport");
-  const lastAirport  = [...waypoints].reverse().find(w=>String(w.wp_type||"").trim().toLowerCase()==="airport");
-  if(firstAirport && firstAirport.rwy_hint) to_rwy_hint = firstAirport.rwy_hint;
-  if(lastAirport  && lastAirport.rwy_hint)  ld_rwy_hint = lastAirport.rwy_hint;
-
-  return {
-    kind:"PLN", format:"XML",
-    departure, destination, title, descr,
-    cruise_ft: cruiseFt,
-    dep_lla: dep_lla ? [dep_lla.lat, dep_lla.lon, dep_lla.alt_m] : null,
-    dst_lla: dst_lla ? [dst_lla.lat, dst_lla.lon, dst_lla.alt_m] : null,
-    waypoints,
-    to_rwy_hint, ld_rwy_hint
-  };
-}
-
-function parsePlnIni(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0).map(l=>l.replace(/\r/g,""));
-  const kv = {};
-  for(const ln0 of lines){
-    const s = ln0.trim();
-    if(s.startsWith(";") || s.startsWith("#")) continue;
-    if(s.startsWith("[") && s.endsWith("]")) continue;
-    const eq = s.indexOf("=");
-    if(eq>=0){
-      const k = s.slice(0,eq).trim().toLowerCase();
-      const v = s.slice(eq+1).trim();
-      kv[k]=v;
-    }
-  }
-
-  const title = (kv["title"] ?? "").trim();
-  const descr = (kv["description"] ?? "").trim();
-  const fp_type = (kv["type"] ?? "").trim();
-
-  let cruise_ft = null;
-  if("cruising_altitude" in kv){
-    const v = Number(String(kv["cruising_altitude"]).trim());
-    cruise_ft = Number.isFinite(v) ? v : null;
-  }
-
-  const splitIdAndCoord = (s)=>{
-    const parts = String(s ?? "").split(",",2).map(x=>x.trim());
-    if(parts.length===2) return [parts[0], parts[1]];
-    return [String(s ?? "").trim(), ""];
-  };
-  const [dep, depCoord] = splitIdAndCoord(kv["departure_id"] ?? "");
-  const [arr, arrCoord] = splitIdAndCoord(kv["destination_id"] ?? "");
-
-  let dep_lla=null, dst_lla=null;
-  if(depCoord){
-    try{ const c=parseWorldPosition(depCoord); dep_lla=[c.lat,c.lon,c.alt_m]; }catch(_){ dep_lla=null; }
-  }
-  if(arrCoord){
-    try{ const c=parseWorldPosition(arrCoord); dst_lla=[c.lat,c.lon,c.alt_m]; }catch(_){ dst_lla=null; }
-  }
-
-  const wpItems = [];
-  for(const [k,v] of Object.entries(kv)){
-    if(k.startsWith("waypoint.")){
-      const idx = parseInt(k.split(".",2)[1],10);
-      if(Number.isFinite(idx)) wpItems.push([idx,v]);
-    }
-  }
-  wpItems.sort((a,b)=>a[0]-b[0]);
-
-  const waypoints=[];
-  for(const [idx, raw] of wpItems){
-    const tokens = String(raw ?? "").split(",").map(t=>t.trim()).filter(t=>t!=="");
-    const coord = tryExtractCoordFromTokens(tokens);
-    let lat=null, lon=null, alt_m=null;
-    if(coord){ lat=coord.lat; lon=coord.lon; alt_m=coord.alt_m; }
-
-    let ident="";
-    let wp_type="User";
-    let airway="";
-
-    if(tokens.length){
-      const first=tokens[0].trim();
-      if(/^[A-Z0-9]{2,6}$/.test(first)) ident=first;
-    }
-    if(tokens.length>=2){
-      const t2=tokens[1].trim().toUpperCase();
-      if(t2==="A") wp_type="Airport";
-      else if(t2==="V") wp_type="VOR";
-      else if(t2==="N") wp_type="NDB";
-      else if(t2==="I") wp_type="Intersection";
-      else wp_type="User";
-    }
-    if(tokens.length){
-      const last=tokens[tokens.length-1].trim();
-      if(/^[A-Z0-9]{3,10}$/.test(last) && !/^[NSWE]\d/.test(last) && !/^[+\-]?\d/.test(last)){
-        airway=last;
-      }
-    }
-    if(!ident) ident=`WP${idx}`;
-
-    waypoints.push({wp_type, ident, region:"", airway, lat, lon, alt_m, rwy_hint:""});
-  }
-
-  const finalTitle = title || `${dep.trim()} - ${arr.trim()}`.replace(/^ - | - $/g,"");
-
-  return {
-    kind:"PLN", format:"INI",
-    departure: dep.trim(), destination: arr.trim(),
-    title: finalTitle, descr,
-    cruise_ft,
-    dep_lla, dst_lla,
-    waypoints,
-    fp_type,
-    to_rwy_hint:"", ld_rwy_hint:""
-  };
-}
-
-function parsePlnAny(text){
-  let t = String(text ?? "").trim();
-  if(!t) throw new Error("Empty text.");
-  if(t.toLowerCase().includes("[flightplan]")) return parsePlnIni(t);
-  if(t.includes("<SimBase") && !t.trimStart().startsWith("<")){
-    t = t.slice(t.indexOf("<SimBase"));
-  }
-  if(t.trimStart().startsWith("<")) return parsePlnXml(t);
-  throw new Error("Unrecognised PLN format.");
-}
-
-/* ============================================================
-   3) RFS parsing (JSON) - J_FlightPlan is JSON string
-   ============================================================ */
-function parseRfsJson(text){
-  let rfs;
-  try{ rfs = JSON.parse(text); }catch(e){ throw new Error(`RFS JSON parse failed: ${e}`); }
-  if(typeof rfs !== "object" || rfs === null || Array.isArray(rfs)) throw new Error("RFS root is not an object/dict.");
-
-  const fpRaw = rfs["J_FlightPlan"];
-  if(!fpRaw) throw new Error("RFS missing J_FlightPlan.");
-  let fp;
-  try{ fp = JSON.parse(fpRaw); }catch(e){ throw new Error(`RFS J_FlightPlan JSON parse failed: ${e}`); }
-
-  const fplist = fp["fPSingleSerializerList"] || [];
-  if(!fplist.length) throw new Error("J_FlightPlan has empty fPSingleSerializerList.");
-  const f0 = fplist[0];
-
-  const dep = String(f0["J_FPDepartureAirport"] || "").trim();
-  const arr = String(f0["J_FPArrivalAirport"] || "").trim();
-  const to_rwy = String(f0["J_AssignedTakeoffRunway"] || "").trim();
-  const ld_rwy = String(f0["J_AssignedLandingRunway"] || "").trim();
-
-  const points = f0["FPPoints"] || [];
-  const norm_points = points.map(p=>{
-    let lat=null, lon=null;
-    try{
-      lat = Number(p?.Coords?.m_Latitude);
-      lon = Number(p?.Coords?.m_Longitude);
-      if(!Number.isFinite(lat)) lat=null;
-      if(!Number.isFinite(lon)) lon=null;
-    }catch(_){ lat=lon=null; }
-
-    let alt_m = p?.Altitude ?? null;
-    alt_m = (alt_m===null || alt_m===undefined) ? null : Number(alt_m);
-    if(!Number.isFinite(alt_m)) alt_m=null;
+    let to_rwy_hint='', ld_rwy_hint='';
+    const firstAirport = waypoints.find(w => String(w.wp_type||'').toLowerCase() === 'airport');
+    const lastAirport = [...waypoints].reverse().find(w => String(w.wp_type||'').toLowerCase() === 'airport');
+    if(firstAirport?.rwy_hint) to_rwy_hint = firstAirport.rwy_hint;
+    if(lastAirport?.rwy_hint) ld_rwy_hint = lastAirport.rwy_hint;
 
     return {
-      ident: String(p?.ident || "").trim(),
-      type: p?.type,
-      isAirport: Boolean(p?.isAirport || false),
-      Airport: String(p?.Airport || "").trim(),
-      lat, lon, alt_m,
-      raw: p
+      kind: 'PLN', format: 'XML',
+      departure, destination, title, descr, cruise_ft: cruiseFt,
+      dep_lla: dep_lla ? [dep_lla.lat, dep_lla.lon, dep_lla.alt_m] : null,
+      dst_lla: dst_lla ? [dst_lla.lat, dst_lla.lon, dst_lla.alt_m] : null,
+      waypoints, to_rwy_hint, ld_rwy_hint
     };
-  });
+  };
 
-  return { kind:"RFS", rfs, fp, dep, arr, to_rwy, ld_rwy, points:norm_points };
-}
-
-/* ============================================================
-   4) Auto-detect input kind
-   ============================================================ */
-function detectInputKind(text){
-  const t = String(text ?? "").trim();
-  if(!t) return null;
-  if(t.startsWith("{") && t.includes('"J_FlightPlan"')) return "RFS";
-  if(t.toLowerCase().includes("[flightplan]") || t.includes("<SimBase") || t.trimStart().startsWith("<")) return "PLN";
-  if(t.startsWith("{")){
-    try{
-      const obj = JSON.parse(t);
-      if(obj && typeof obj === "object" && !Array.isArray(obj) && ("J_FlightPlan" in obj)) return "RFS";
-    }catch(_){}
-  }
-  return null;
-}
-
-/* ============================================================
-   5) Weather mappings & constraints
-   ============================================================ */
-const METAR_MODE = { CUSTOM:0, REAL:1, RANDOM:2 };
-const WEATHER_MAP = { CLEAR:0, FOG:1, RAIN:2, SNOW:3, STORM:4 };
-const CLOUD_MAP = {
-  "NO SIGNIFICANT CLOUD":0,
-  "FEW CLOUDS":1,
-  "SCATTERED CLOUDS":2,
-  "BROKEN CLOUDS":3,
-  "OVERCAST":4
-};
-const SNOW_COVER_MAP = { NONE:0, LOW:1, MEDIUM:2, HIGH:3 };
-
-function enforceWeatherConstraints(state, els){
-  const w = state.weather;
-  if(w === "CLEAR"){
-    state.fog_pct = 0;
-    els.fog_pct.disabled = true;
-    els.clouds.disabled = false;
-  }else{
-    state.clouds = "OVERCAST";
-    els.clouds.disabled = true;
-    els.fog_pct.disabled = false;
-    if(state.fog_pct < 5) state.fog_pct = 5;
-  }
-  els.turb_pct.disabled = (w === "STORM");
-}
-
-/* ============================================================
-   6) PLN -> RFS builder
-   ============================================================ */
-function firstCoord(pln){
-  for(const w of pln.waypoints){
-    if(w.lat!=null && w.lon!=null){
-      return [w.lat, w.lon, (w.alt_m!=null ? w.alt_m : 0.0)];
-    }
-  }
-  if(pln.dep_lla) return [pln.dep_lla[0], pln.dep_lla[1], pln.dep_lla[2]];
-  return [0,0,0];
-}
-function lastCoord(pln){
-  for(let i=pln.waypoints.length-1;i>=0;i--){
-    const w = pln.waypoints[i];
-    if(w.lat!=null && w.lon!=null){
-      return [w.lat, w.lon, (w.alt_m!=null ? w.alt_m : 0.0)];
-    }
-  }
-  if(pln.dst_lla) return [pln.dst_lla[0], pln.dst_lla[1], pln.dst_lla[2]];
-  return [0,0,0];
-}
-
-function buildFpPointsFromPln(pln, dep, arr, to_rwy, ld_rwy, cruise_ft){
-  const notes=[];
-  const fp_points=[];
-  if(to_rwy){
-    const [lat,lon,alt_m] = firstCoord(pln);
-    fp_points.push({
-      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:dep,
-      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
-      ident:`RW${to_rwy}`, type:25, isAirport:true, IconId:7, Description:"RUNWAY"
+  const parsePlnIni = text => {
+    const kv = {};
+    text.split(/\r?\n/).forEach(ln => {
+      const s = ln.trim();
+      if(!s || s.startsWith(';') || s.startsWith('#') || (s.startsWith('[') && s.endsWith(']'))) return;
+      const eq = s.indexOf('=');
+      if(eq<0) return;
+      kv[s.slice(0,eq).trim().toLowerCase()] = s.slice(eq+1).trim();
     });
-  }
-  let dropped=0;
-  for(let i=0;i<pln.waypoints.length;i++){
-    const wp = pln.waypoints[i];
-    const lat=wp.lat, lon=wp.lon;
-    if(lat==null || lon==null){ dropped++; continue; }
-    let alt_m = wp.alt_m;
-    if(alt_m==null) alt_m = feetToM(cruise_ft);
-    fp_points.push({
-      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:"",
-      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
-      ident:(wp.ident || `WP${i+1}`),
-      type:13, isAirport:false, IconId:1, Description:"GPS-WP"
-    });
-  }
-  if(dropped) notes.push(`Dropped ${dropped} waypoint(s) with no coordinates (no navdata lookup in this script).`);
-  if(ld_rwy){
-    const [lat,lon,alt_m] = lastCoord(pln);
-    fp_points.push({
-      Altitude:Number(alt_m), Speed:0.0, IsProcedure:true, Airport:arr,
-      Coords:{m_Latitude:Number(lat), m_Longitude:Number(lon)},
-      ident:`RW${ld_rwy}`, type:25, isAirport:true, IconId:7, Description:"RUNWAY"
-    });
-  }
-  if(!fp_points.length) throw new Error("No FPPoints produced. All waypoints missing coords AND no Dep/Dst coords found.");
-  return {fp_points, notes};
-}
 
-function buildUniformWeather(state){
-  let {weather, clouds, wind_dir, wind_spd, temp_c, cloud_base_ft, turb_pct, fog_pct, snow_cov, qnh, vis_m} = state;
-
-  if(weather === "CLEAR"){
-    fog_pct = 0;
-  }else{
-    clouds = "OVERCAST";
-    fog_pct = Math.max(5, fog_pct);
-  }
-
-  return {
-    "COORDS": {"m_Latitude": 45.0, "m_Longitude": 0.0},
-    "Wind": Number(wind_spd),
-    "m_Coords": {"m_Latitude": 45.0, "m_Longitude": 0.0},
-    "Ident": "",
-    "WeatherType": WEATHER_MAP[weather],
-    "CloudType": CLOUD_MAP[clouds],
-    "CloudsBase": feetToM(cloud_base_ft),
-    "QNH": parseInt(qnh,10),
-    "_wind": Number(wind_spd),
-    "WindDirection": Number(wind_dir),
-    "TurbulenceNormalized": clamp01(Number(turb_pct)/100.0),
-    "RefAltitude": 0.0,
-    "Temperature": Number(temp_c),
-    "DevTemperature": 0.0,
-    "FogIntensityNormalized": clamp01(Number(fog_pct)/100.0),
-    "SnowCoverage": SNOW_COVER_MAP[snow_cov],
-    "VisibilityMeters": Number(vis_m)
-  };
-}
-
-function buildLivery(state){
-  const aircraft_id = (state.liv_aircraft_id || "A320N").trim() || "A320N";
-  const liv_id = (state.liv_id || "DEFAULT").trim() || "DEFAULT";
-  const liv_name = (state.liv_name || liv_id).trim() || liv_id;
-  const liv_by = (state.liv_by || "Rortos").trim() || "Rortos";
-  const liv_ver = parseInt(state.liv_ver,10) || 0;
-  const liv_type = parseInt(state.liv_type,10) || 0;
-  const liv_date = parseInt(state.liv_date,10) || 0;
-  const liv_fav = Boolean(state.liv_fav);
-
-  return {
-    "AircraftID": aircraft_id,
-    "ID": liv_id,
-    "Version": liv_ver,
-    "Type": liv_type,
-    "By": liv_by,
-    "Date": liv_date,
-    "IsFavorite": liv_fav,
-    "Fps": 0,
-    "Name": liv_name,
-
-    "<AircraftID>k__BackingField": aircraft_id,
-    "<ID>k__BackingField": liv_id,
-    "<Version>k__BackingField": liv_ver,
-    "<Type>k__BackingField": liv_type,
-    "<By>k__BackingField": liv_by,
-    "<Date>k__BackingField": liv_date,
-    "<IsFavorite>k__BackingField": liv_fav,
-    "m_Fps": 0,
-    "m_Name": liv_name
-  };
-}
-
-function buildRfsFromPln(pln, state){
-  const notes=[];
-  const title = state.title ?? "";
-  const descr = state.descr ?? "";
-  const tags  = state.tags ?? "";
-
-  const date_is_real = (state.dt_mode === "REAL");
-  const activity_date = date_is_real ? nowUtcIso() : ((state.custom_iso || "").trim() || nowUtcIso());
-
-  const livery = buildLivery(state);
-  const aircraft_id = livery.AircraftID;
-
-  const aircraft_load = {
-    FuelQuantityNormalized: clamp01(Number(state.fuel_pct)/100.0),
-    PassengersNumber: parseInt(state.pax,10),
-    CargoLoad: parseInt(state.cargo_kg,10),
-    MealsLoad: 0
-  };
-
-  const dep = String(state.dep || "").trim();
-  const arr = String(state.arr || "").trim();
-  if(!dep || !arr) throw new Error("DEP/ARR cannot be empty.");
-
-  const to_rwy = String(state.to_rwy || "").trim();
-  const ld_rwy = String(state.ld_rwy || "").trim();
-  const cruise_ft = Number(state.cruise_ft);
-
-  const {fp_points, notes:fpNotes} = buildFpPointsFromPln(pln, dep, arr, to_rwy, ld_rwy, cruise_ft);
-  notes.push(...fpNotes);
-
-  const j_flight_plan_obj = {
-    selectedIdx: 0,
-    fPSingleSerializerList: [{
-      J_FPDepartureAirport: dep,
-      J_FPArrivalAirport: arr,
-      J_AssignedTakeoffRunway: to_rwy,
-      J_AssignedLandingRunway: ld_rwy,
-      J_Sid:"", J_SidTransition:"",
-      J_Star:"",
-      J_Approach:"", J_ApproachTransition:"",
-      FPPoints: fp_points,
-      J_ArrivalAirportParkingPoint: String(state.arr_parking || "0").trim() || "0"
-    }]
-  };
-
-  let dep_lat, dep_lon;
-  if(pln.dep_lla){
-    dep_lat = pln.dep_lla[0]; dep_lon = pln.dep_lla[1];
-  }else{
-    [dep_lat, dep_lon] = firstCoord(pln);
-  }
-
-  const spawn_id = String(state.spawn_id || "0").trim() || "0";
-  const departure_gate = (state.start_pos === "GATE");
-
-  let seed;
-  if(String(state.seed || "").trim()===""){
-    seed = Math.floor(1 + Math.random() * 2147483646);
-    notes.push(`Seed auto-generated: ${seed}`);
-  }else{
-    seed = parseInt(String(state.seed).trim(),10);
-  }
-
-  const metar_mode = state.metar_mode;
-  const uniform_weather = buildUniformWeather(state);
-  const flight_activity_weather = METAR_MODE[metar_mode];
-
-  const rfs = {
-    Livery: livery,
-    StartType: 0,
-    LevelConfig: {
-      LevelName:"Simulator", TutorialID:null, TutorialCheckpointStepIndex:0, TutorialCheckpointPreferences:null,
-      "<LevelName>k__BackingField":"Simulator","<TutorialID>k__BackingField":null,
-      "<TutorialCheckpointStepIndex>k__BackingField":0,"<TutorialCheckpointPreferences>k__BackingField":null
-    },
-    Title: title,
-    Description: descr,
-    Tags: tags,
-    AircraftLoad: aircraft_load,
-    m_livery: livery,
-
-    InitialSpeed: 0.0,
-    m_InitialPosition: {m_Latitude:2000.0, m_Longitude:2000.0},
-    InitialAltitude: 0.0,
-    InitialHeading: 0.0,
-    InitialWaypointIdent: "",
-
-    DepartureGate: departure_gate,
-    SpawnPoint: {
-      Coords: {m_Latitude:Number(dep_lat), m_Longitude:Number(dep_lon)},
-      Type: 1,
-      ID: spawn_id,
-      m_groundPointCoords: {m_Latitude:Number(dep_lat), m_Longitude:Number(dep_lon)}
-    },
-
-    ProNeeded: Boolean(state.pro_needed),
-    Seed: seed,
-
-    J_AircraftID: aircraft_id,
-    J_StartReferenceAirportID: dep,
-    J_FlightPlan: JSON.stringify(j_flight_plan_obj),
-
-    ActivityType: 0,
-    FlightActivityWeather: flight_activity_weather,
-    UniformWeather: uniform_weather,
-
-    ActivityDate: activity_date,
-    DateIsReal: date_is_real,
-
-    ActivityHandlerCheckersManager: {
-      DepartureAirportsCheckersManagers:{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
-      ArrivalAirportsCheckersManagers:{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
-      "<DepartureAirportsCheckersManagers>k__BackingField":{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]},
-      "<ArrivalAirportsCheckersManagers>k__BackingField":{EveryCheckPassedInOR:true,EveryCheckPassedInAND:true,NumbersOfCheck:0,m_Checkers:[]}
-    }
-  };
-
-  return {rfs, notes};
-}
-
-/* ============================================================
-   7) RFS -> PLN helpers + builder
-   ============================================================ */
-function decToDms(dec, isLat=true){
-  const hemiPos = isLat ? "N" : "E";
-  const hemiNeg = isLat ? "S" : "W";
-  const hemi = (dec>=0) ? hemiPos : hemiNeg;
-  const x = Math.abs(Number(dec));
-  const deg = Math.floor(x);
-  const mFloat = (x - deg) * 60.0;
-  const minute = Math.floor(mFloat);
-  const sec = (mFloat - minute) * 60.0;
-  return {hemi, deg, minute, sec};
-}
-function formatDms(dec, isLat=true){
-  const {hemi,deg,minute,sec} = decToDms(dec,isLat);
-  return `${hemi}${deg}° ${minute}' ${sec.toFixed(2)}"`;
-}
-function formatDmStar(dec, isLat=true){
-  const {hemi,deg,minute,sec} = decToDms(dec,isLat);
-  const minutesDecimal = minute + sec/60.0;
-  return `${hemi}${deg}* ${minutesDecimal.toFixed(2)}'`;
-}
-function formatAltFt(alt_m){
-  const altFt = mToFeet((alt_m!=null)?alt_m:0.0);
-  const sign = (altFt>=0) ? "+" : "-";
-  const abs = Math.abs(altFt);
-  const s = abs.toFixed(2).padStart(9,"0");
-  return `${sign}${s}`;
-}
-function toWorldposStr(lat, lon, alt_m){
-  return `${formatDms(lat,true)},${formatDms(lon,false)},${formatAltFt(alt_m)}`;
-}
-function toIniCoordStr(lat, lon, alt_m){
-  return `${formatDmStar(lat,true)}, ${formatDmStar(lon,false)}, ${formatAltFt(alt_m)}`;
-}
-function parseRwyString(rwy){
-  const s = String(rwy||"").trim().toUpperCase();
-  if(!s) return ["",""];
-  const m = s.match(/^(\d{1,2})([LRC])?$/);
-  if(!m) return [s,""];
-  const num = String(parseInt(m[1],10)).padStart(2,"0");
-  const des = m[2] || "";
-  const map = {L:"LEFT", R:"RIGHT", C:"CENTER"};
-  return [num, map[des] || ""];
-}
-function prettyXmlString(xmlString){
-  const IND = "  ";
-  const reg = /(>)(<)(\/*)/g;
-  let xml = String(xmlString).replace(reg, "$1\n$2$3");
-  const lines = xml.split("\n").map(l=>l.trim()).filter(l=>l.length>0);
-  let pad = 0;
-  const out = [];
-  for(const line of lines){
-    if(/^<\/.+>/.test(line)) pad = Math.max(pad - 1, 0);
-    out.push(IND.repeat(pad) + line);
-    const isOpening =
-      /^<[^!?\/][^>]*>$/.test(line) && !/\/>$/.test(line) && !/^<[^>]+>.*<\/[^>]+>$/.test(line);
-    if(isOpening) pad += 1;
-  }
-  return out.join("\n") + "\n";
-}
-function withXmlDeclaration(prettyBody){
-  const decl = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-  const body = String(prettyBody || "");
-  if(body.startsWith("<?xml")) return body;
-  return decl + body;
-}
-
-function extractRoutePointsFromRfsPoints(points){
-  const route=[];
-  for(const p of points){
-    const ident = String(p.ident||"").toUpperCase();
-    if(p.type===25 && ident.startsWith("RW")) continue;
-    if(p.lat==null || p.lon==null) continue;
-    route.push(p);
-  }
-  return route;
-}
-
-function buildPlnXmlFromRfs(rfsPack, state){
-  const dep = String(state.dep||"").trim();
-  const arr = String(state.arr||"").trim();
-  const title = (String(state.title||"").trim() || `${dep} to ${arr}`);
-  const descr = (String(state.descr||"").trim() || `${dep} to ${arr} created by RFS converter`);
-  const fp_type = state.fp_type;
-  const route_type = state.route_type; // LowAlt / HighAlt
-  const cruise_ft = Number(state.cruise_ft);
-
-  const to_rwy = String(state.to_rwy||"").trim();
-  const ld_rwy = String(state.ld_rwy||"").trim();
-  const dep_name = (String(state.dep_name||"").trim() || dep);
-  const arr_name = (String(state.arr_name||"").trim() || arr);
-
-  const pts = extractRoutePointsFromRfsPoints(rfsPack.points);
-  if(!pts.length) throw new Error("No usable route points found in RFS (coords missing or only runway points).");
-
-  const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = (pts[0].alt_m ?? 0.0);
-  const arr_lat = pts[pts.length-1].lat, arr_lon = pts[pts.length-1].lon, arr_alt_m = (pts[pts.length-1].alt_m ?? 0.0);
-
-  const [dep_rwy_num, dep_rwy_des] = parseRwyString(to_rwy);
-  const [arr_rwy_num, arr_rwy_des] = parseRwyString(ld_rwy);
-
-  const doc = document.implementation.createDocument(null, "SimBase.Document", null);
-  const root = doc.documentElement;
-  root.setAttribute("Type","AceXML");
-  root.setAttribute("version","1,0");
-
-  const descrEl = doc.createElement("Descr");
-  descrEl.textContent = "AceXML Document";
-  root.appendChild(descrEl);
-
-  const fp = doc.createElement("FlightPlan.FlightPlan");
-  root.appendChild(fp);
-
-  const add = (name, text)=>{
-    const el = doc.createElement(name);
-    el.textContent = String(text);
-    fp.appendChild(el);
-    return el;
-  };
-
-  add("Title", title);
-  add("FPType", fp_type);
-  add("RouteType", route_type);
-  add("CruisingAlt", cruise_ft.toFixed(3));
-  add("DepartureID", dep);
-  add("DepartureLLA", toWorldposStr(dep_lat, dep_lon, dep_alt_m));
-  add("DestinationID", arr);
-  add("DestinationLLA", toWorldposStr(arr_lat, arr_lon, arr_alt_m));
-  add("Descr", descr);
-  add("DepartureName", dep_name);
-  add("DestinationName", arr_name);
-
-  const includeRwy = Boolean(state.include_rwy);
-
-  for(let i=0;i<pts.length;i++){
-    const p = pts[i];
-    const isFirst = (i===0);
-    const isLast = (i===pts.length-1);
-
-    let wp_id, wp_type, ident;
-    if(isFirst){ wp_id = dep; wp_type="Airport"; ident=dep; }
-    else if(isLast){ wp_id = arr; wp_type="Airport"; ident=arr; }
-    else{
-      wp_id = String(p.ident || `WP${i}`).trim() || `WP${i}`;
-      wp_type = "User";
-      ident = wp_id;
+    const title = kv.title ?? '';
+    const descr = kv.description ?? '';
+    const fp_type = kv.type ?? '';
+    let cruise_ft = null;
+    if('cruising_altitude' in kv) {
+      const v = Number(kv.cruising_altitude);
+      if(isFiniteNumber(v)) cruise_ft = v;
     }
 
-    const wpEl = doc.createElement("ATCWaypoint");
-    wpEl.setAttribute("id", wp_id);
+    const splitIdAndCoord = s => {
+      const parts = String(s??'').split(',').map(x=>x.trim());
+      return parts.length>=2 ? [parts[0], parts.slice(1).join(',')] : [String(s??'').trim(), ''];
+    };
+    const [dep, depCoord] = splitIdAndCoord(kv.departure_id);
+    const [arr, arrCoord] = splitIdAndCoord(kv.destination_id);
 
-    const tEl = doc.createElement("ATCWaypointType");
-    tEl.textContent = wp_type;
-    wpEl.appendChild(tEl);
+    let dep_lla=null, dst_lla=null;
+    if(depCoord) try { const c=parseWorldPosition(depCoord); dep_lla=[c.lat,c.lon,c.alt_m]; } catch {}
+    if(arrCoord) try { const c=parseWorldPosition(arrCoord); dst_lla=[c.lat,c.lon,c.alt_m]; } catch {}
 
-    const wpos = doc.createElement("WorldPosition");
-    wpos.textContent = toWorldposStr(p.lat, p.lon, (p.alt_m ?? feetToM(cruise_ft)));
-    wpEl.appendChild(wpos);
+    const wpItems = Object.entries(kv)
+      .filter(([k])=>k.startsWith('waypoint.'))
+      .map(([k,v])=>[parseInt(k.split('.')[1],10), v])
+      .filter(([idx])=>Number.isFinite(idx))
+      .sort((a,b)=>a[0]-b[0]);
 
-    if(includeRwy && isFirst && dep_rwy_num){
-      const rn = doc.createElement("RunwayNumberFP");
-      rn.textContent = dep_rwy_num;
-      wpEl.appendChild(rn);
-      if(dep_rwy_des){
-        const rd = doc.createElement("RunwayDesignatorFP");
-        rd.textContent = dep_rwy_des;
-        wpEl.appendChild(rd);
+    const waypoints = wpItems.map(([idx, raw]) => {
+      const tokens = String(raw??'').split(',').map(t=>t.trim()).filter(Boolean);
+      const coord = tryExtractCoordFromTokens(tokens);
+      let lat=null, lon=null, alt_m=null;
+      if(coord) { lat=coord.lat; lon=coord.lon; alt_m=coord.alt_m; }
+
+      let ident='', wp_type='User', airway='';
+      if(tokens[0] && /^[A-Z0-9]{2,6}$/.test(tokens[0])) ident = tokens[0];
+      if(tokens[1]) {
+        const t2 = tokens[1].toUpperCase();
+        if(t2 === 'A') wp_type = 'Airport';
+        else if(t2 === 'V') wp_type = 'VOR';
+        else if(t2 === 'N') wp_type = 'NDB';
+        else if(t2 === 'I') wp_type = 'Intersection';
+      }
+      const last = tokens[tokens.length-1];
+      if(last && /^[A-Z0-9]{3,10}$/.test(last) && !/^[NSWE]\d/.test(last) && !/^[+-]?\d/.test(last)) airway = last;
+      if(!ident) ident = `WP${idx}`;
+      return { wp_type, ident, region: '', airway, lat, lon, alt_m, rwy_hint: '' };
+    });
+
+    const finalTitle = title || `${dep.trim()} - ${arr.trim()}`.replace(/^ - | - $/g, '');
+    return {
+      kind: 'PLN', format: 'INI',
+      departure: dep.trim(), destination: arr.trim(),
+      title: finalTitle, descr, cruise_ft,
+      dep_lla, dst_lla, waypoints, fp_type,
+      to_rwy_hint: '', ld_rwy_hint: ''
+    };
+  };
+
+  const parsePlnAny = text => {
+    let t = String(text??'').trim();
+    if(!t) throw new Error('Empty content');
+    if(t.toLowerCase().includes('[flightplan]')) return parsePlnIni(t);
+    if(t.includes('<SimBase') && !t.trimStart().startsWith('<')) t = t.slice(t.indexOf('<SimBase'));
+    if(t.trimStart().startsWith('<')) return parsePlnXml(t);
+    throw new Error('Unrecognised PLN format');
+  };
+
+  /* ------------------------------------------------------------------------
+     4. RFS parser
+  ------------------------------------------------------------------------ */
+  const parseRfsJson = text => {
+    let rfs;
+    try { rfs = JSON.parse(text); } catch(e) { throw new Error(`RFS JSON parse failed: ${e}`); }
+    if(typeof rfs !== 'object' || !rfs || Array.isArray(rfs)) throw new Error('RFS root invalid');
+    if(!rfs.J_FlightPlan) throw new Error('Missing J_FlightPlan');
+    let fp;
+    try { fp = JSON.parse(rfs.J_FlightPlan); } catch(e) { throw new Error(`J_FlightPlan parse failed: ${e}`); }
+    const f0 = fp.fPSingleSerializerList?.[0];
+    if(!f0) throw new Error('Empty fPSingleSerializerList');
+
+    const dep = String(f0.J_FPDepartureAirport || '').trim();
+    const arr = String(f0.J_FPArrivalAirport || '').trim();
+    const to_rwy = String(f0.J_AssignedTakeoffRunway || '').trim();
+    const ld_rwy = String(f0.J_AssignedLandingRunway || '').trim();
+
+    const points = (f0.FPPoints || []).map(p => {
+      let lat=null, lon=null;
+      try { lat = Number(p.Coords?.m_Latitude); if(!Number.isFinite(lat)) lat=null; } catch {}
+      try { lon = Number(p.Coords?.m_Longitude); if(!Number.isFinite(lon)) lon=null; } catch {}
+      let alt_m = p.Altitude; 
+      alt_m = (alt_m===null || alt_m===undefined) ? null : Number(alt_m);
+      if(!Number.isFinite(alt_m)) alt_m = null;
+      return {
+        ident: String(p.ident || '').trim(),
+        type: p.type ?? null,
+        isAirport: Boolean(p.isAirport),
+        Airport: String(p.Airport || '').trim(),
+        lat, lon, alt_m
+      };
+    });
+    return { kind:'RFS', rfs, fp, dep, arr, to_rwy, ld_rwy, points };
+  };
+
+  /* ------------------------------------------------------------------------
+     5. KML parser (RFS‑flavoured / generic GIS)
+  ------------------------------------------------------------------------ */
+  const parseKmlAny = kmlText => {
+    const doc = new DOMParser().parseFromString(kmlText, 'application/xml');
+    if(doc.querySelector('parsererror')) throw new Error('KML XML parse error');
+    const root = doc.documentElement;
+    if(!root?.tagName?.toLowerCase().includes('kml')) throw new Error('Not a KML document');
+
+    const getText = sel => doc.querySelector(sel)?.textContent?.trim() ?? '';
+    const nameCandidates = [];
+    ['kml>Document>name','kml>Document>Folder>name','Document>name','Folder>name'].forEach(sel => {
+      const v = getText(sel);
+      if(v) nameCandidates.push(v);
+    });
+    const docName = nameCandidates[0] || '';
+
+    const inferIcaoPairFromName = s => {
+      const t = String(s||'').toUpperCase();
+      let m = t.match(/TRACK:\s*([A-Z0-9]{3,4})\s*[-–—>]+\s*([A-Z0-9]{3,4})/);
+      if(m) return [m[1], m[2]];
+      m = t.match(/\b([A-Z]{4})\b\s*[-–—>]+\s*\b([A-Z]{4})\b/);
+      if(m) return [m[1], m[2]];
+      m = t.match(/\b([A-Z]{3,4})\b\s+TO\s+\b([A-Z]{3,4})\b/);
+      if(m) return [m[1], m[2]];
+      return ['',''];
+    };
+    let [depGuess, arrGuess] = inferIcaoPairFromName(docName);
+
+    const icaoPlacemarks = [];
+    for(const pm of doc.getElementsByTagName('Placemark')) {
+      const nmEl = Array.from(pm.children).find(x => x.tagName?.toLowerCase().endsWith('name'));
+      const nm = nmEl?.textContent?.trim().toUpperCase() ?? '';
+      if(/^[A-Z]{4}$/.test(nm)) icaoPlacemarks.push(nm);
+    }
+    if(!depGuess && icaoPlacemarks.length) depGuess = icaoPlacemarks[0];
+    if(!arrGuess && icaoPlacemarks.length) arrGuess = icaoPlacemarks[icaoPlacemarks.length-1];
+
+    let coordsText = '';
+    const coordEls = doc.getElementsByTagName('coordinates');
+    for(const cEl of coordEls) {
+      if(cEl.parentElement?.tagName?.toLowerCase().endsWith('linestring')) {
+        coordsText = cEl.textContent?.trim() ?? '';
+        if(coordsText) break;
       }
     }
-    if(includeRwy && isLast && arr_rwy_num){
-      const rn = doc.createElement("RunwayNumberFP");
-      rn.textContent = arr_rwy_num;
-      wpEl.appendChild(rn);
-      if(arr_rwy_des){
-        const rd = doc.createElement("RunwayDesignatorFP");
-        rd.textContent = arr_rwy_des;
-        wpEl.appendChild(rd);
-      }
-    }
+    if(!coordsText && coordEls.length) coordsText = coordEls[0].textContent?.trim() ?? '';
+    if(!coordsText) throw new Error('KML missing <coordinates>');
 
-    const icao = doc.createElement("ICAO");
-    const icaoIdent = doc.createElement("ICAOIdent");
-    icaoIdent.textContent = ident;
-    icao.appendChild(icaoIdent);
-    wpEl.appendChild(icao);
+    const pts = coordsText.split(/\s+/).map(t=>t.trim()).filter(Boolean)
+      .map(tup => tup.split(',').map(x=>x.trim()))
+      .filter(parts => parts.length>=2)
+      .map(parts => {
+        const lon = Number(parts[0]), lat = Number(parts[1]);
+        if(!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        let alt_m = null;
+        if(parts.length>=3) { const a = Number(parts[2]); if(Number.isFinite(a)) alt_m = a; }
+        return { lat, lon, alt_m };
+      })
+      .filter(Boolean);
+    if(!pts.length) throw new Error('0 coordinate points parsed');
 
-    fp.appendChild(wpEl);
-  }
+    const nameAll = nameCandidates.join(' | ').toUpperCase();
+    const hasTrackName = nameAll.includes('TRACK:');
+    const hasRouteMark = kmlText.includes('RouteMark') || kmlText.includes('#RouteMark');
+    const variant = (hasRouteMark && !hasTrackName) ? 'KML_RFS' : 'KML_GIS';
 
-  const raw = new XMLSerializer().serializeToString(doc);
-  const pretty = prettyXmlString(raw);
-  return withXmlDeclaration(pretty);
-}
-
-function buildPlnIniFromRfs(rfsPack, state){
-  const dep = String(state.dep||"").trim();
-  const arr = String(state.arr||"").trim();
-  const title = (String(state.title||"").trim() || `${dep} to ${arr}`);
-  const descr = (String(state.descr||"").trim() || `${dep}, ${arr}`);
-  const fp_type = state.fp_type;
-
-  const routetype = (state.route_type === "LowAlt") ? 2 : 3;
-  const cruise_ft = parseInt(state.cruise_ft,10);
-
-  const pts = extractRoutePointsFromRfsPoints(rfsPack.points);
-  if(!pts.length) throw new Error("No usable route points found in RFS (coords missing or only runway points).");
-
-  const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = (pts[0].alt_m ?? 0.0);
-  const arr_lat = pts[pts.length-1].lat, arr_lon = pts[pts.length-1].lon, arr_alt_m = (pts[pts.length-1].alt_m ?? 0.0);
-
-  const dep_name = (String(state.dep_name||"").trim() || dep);
-  const arr_name = (String(state.arr_name||"").trim() || arr);
-
-  const lines=[];
-  lines.push("[flightplan]");
-  lines.push(`title=${title}`);
-  lines.push(`description=${descr}`);
-  lines.push(`type=${fp_type}`);
-  lines.push(`routetype=${routetype}`);
-  lines.push(`cruising_altitude=${String(cruise_ft).padStart(5,"0")}`);
-  lines.push(`departure_id=${dep}, ${toIniCoordStr(dep_lat, dep_lon, dep_alt_m)}`);
-  lines.push(`destination_id=${arr}, ${toIniCoordStr(arr_lat, arr_lon, arr_alt_m)}`);
-  lines.push(`departure_name=${dep_name}`);
-  lines.push(`destination_name=${arr_name}`);
-
-  for(let i=0;i<pts.length;i++){
-    const p = pts[i];
-    const isFirst = (i===0);
-    const isLast = (i===pts.length-1);
-    let ident, tletter;
-    if(isFirst){ ident=dep; tletter="A"; }
-    else if(isLast){ ident=arr; tletter="A"; }
-    else{
-      ident = String(p.ident || `WP${i}`).trim() || `WP${i}`;
-      tletter = /^[A-Z]{3}$/.test(ident) ? "V" : "U";
-    }
-    const coordStr = toIniCoordStr(p.lat, p.lon, (p.alt_m ?? feetToM(cruise_ft)));
-    lines.push(`waypoint.${i}=${ident}, ${tletter}, ${coordStr},`);
-  }
-  return lines.join("\n");
-}
-
-/* ============================================================
-   8) UI renderer
-   ============================================================ */
-function el(tag, attrs={}, children=[]){
-  const e = document.createElement(tag);
-  for(const [k,v] of Object.entries(attrs)){
-    if(k==="class") e.className = v;
-    else if(k==="html") e.innerHTML = v;
-    else if(k.startsWith("on") && typeof v==="function") e.addEventListener(k.slice(2), v);
-    else e.setAttribute(k, v);
-  }
-  for(const c of children){
-    if(c==null) continue;
-    if(typeof c === "string") e.appendChild(document.createTextNode(c));
-    else e.appendChild(c);
-  }
-  return e;
-}
-
-function makeTabs(tabNames){
-  const tabs = el("div",{class:"tabs"});
-  const bar = el("div",{class:"tabbar"});
-  const panels = tabNames.map(()=>el("div",{class:"tabpanel"}));
-  tabNames.forEach((name,i)=>{
-    const b = el("button",{html:escapeHtml(name)});
-    b.addEventListener("click", ()=>{
-      Array.from(bar.children).forEach(x=>x.classList.remove("active"));
-      panels.forEach(p=>p.classList.remove("active"));
-      b.classList.add("active");
-      panels[i].classList.add("active");
-    });
-    bar.appendChild(b);
-  });
-  tabs.appendChild(bar);
-  panels.forEach(p=>tabs.appendChild(p));
-  bar.children[0].classList.add("active");
-  panels[0].classList.add("active");
-  return {tabs, panels};
-}
-
-function fieldText(label, key, state, opts={}){
-  const input = el("input",{type:"text", value: state[key] ?? "", placeholder: opts.placeholder ?? ""});
-  input.addEventListener("input", ()=>{ state[key]=input.value; });
-  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), input]), input};
-}
-function fieldNumber(label, key, state, opts={}){
-  const input = el("input",{type:"number", value: state[key], min: opts.min, max: opts.max, step: opts.step ?? "1"});
-  input.addEventListener("input", ()=>{ state[key]=input.value; });
-  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), input]), input};
-}
-function fieldSelect(label, key, state, options, opts={}){
-  const select = el("select",{});
-  options.forEach(o=>{
-    const opt = el("option",{value:o, html:escapeHtml(o)});
-    select.appendChild(opt);
-  });
-  select.value = state[key];
-  select.addEventListener("change", ()=>{ state[key]=select.value; opts.onChange?.(select.value, select); });
-  return {wrap: el("div",{class:"field "+(opts.className||"")},[el("label",{html:escapeHtml(label)}), select]), select};
-}
-function fieldCheckbox(label, key, state, opts={}){
-  const input = el("input",{type:"checkbox"});
-  input.checked = Boolean(state[key]);
-  input.addEventListener("change", ()=>{ state[key]=input.checked; opts.onChange?.(input.checked, input); });
-  const row = el("div",{class:"inline"},[
-    input,
-    el("span",{html:`<strong>${escapeHtml(label)}</strong>`})
-  ]);
-  return {wrap: el("div",{class:"field "+(opts.className||"")},[row]), input};
-}
-function fieldRange(label, key, state, opts={}){
-  const range = el("input",{type:"range", min:opts.min, max:opts.max, step:opts.step ?? "1", value: state[key]});
-  const valueSpan = el("span",{class:"pill", html: escapeHtml(String(state[key]))});
-  range.addEventListener("input", ()=>{
-    state[key]=Number(range.value);
-    valueSpan.textContent = String(state[key]);
-    opts.onInput?.(state[key], range);
-  });
-  const top = el("div",{class:"inline"},[
-    el("span",{html:`<strong>${escapeHtml(label)}</strong>`}),
-    valueSpan
-  ]);
-  return {wrap: el("div",{class:"field "+(opts.className||"")},[top, range]), range, valueSpan};
-}
-
-/* ============================================================
-   9) App state + output/download
-   ============================================================ */
-let lastOutput = { text:"", filename:"output.txt", mime:"text/plain" };
-
-function makeSafeBaseName(s){
-  const t = String(s||"").trim().replace(/[\\\/:*?"<>|]+/g,"-");
-  return (t.length ? t : "route");
-}
-function computeOutFilename(kind, dep, arr){
-  const base = `${makeSafeBaseName(dep)}-${makeSafeBaseName(arr)}`.replace(/\s+/g,"_");
-  if(kind === "RFS") return `${base}.rfs`;
-  if(kind === "PLN_XML") return `${base}.pln`;
-  if(kind === "PLN_INI") return `${base}.pln`;
-  return `${base}.txt`;
-}
-
-function showOutput(text, kindLabel, hint, filename, mime){
-  const outArea = document.getElementById("outputArea");
-  outArea.classList.remove("hidden");
-  document.getElementById("outKind").textContent = kindLabel;
-  document.getElementById("outputBox").value = text;
-  document.getElementById("outHint").textContent = hint || "";
-
-  lastOutput = {
-    text,
-    filename: filename || "output.txt",
-    mime: mime || "text/plain"
-  };
-  document.getElementById("outFileName").textContent = lastOutput.filename;
-}
-
-function hideOutput(){
-  document.getElementById("outputArea").classList.add("hidden");
-  document.getElementById("outputBox").value = "";
-  document.getElementById("outKind").textContent = "—";
-  document.getElementById("outHint").textContent = "";
-  document.getElementById("outFileName").textContent = "—";
-  lastOutput = { text:"", filename:"output.txt", mime:"text/plain" };
-}
-
-/* ============================================================
-   11) Render UIs
-   ============================================================ */
-function renderPlnToRfsUi(pln){
-  const uiArea = document.getElementById("uiArea");
-  uiArea.innerHTML = "";
-  uiArea.classList.remove("hidden");
-  hideOutput();
-
-  const state = {
-    title: pln.title || "",
-    descr: pln.descr || "",
-    tags: "",
-
-    dt_mode: "CUSTOM",
-    custom_iso: nowUtcIso(),
-
-    liv_aircraft_id: "A320N",
-    liv_id: "DEFAULT",
-    liv_name: "DEFAULT",
-    liv_by: "Rortos",
-    liv_ver: 2,
-    liv_type: 0,
-    liv_date: 1600387200,
-    liv_fav: false,
-
-    fuel_pct: 37,
-    pax: 139,
-    cargo_kg: 9205,
-    pro_needed: true,
-
-    dep: (pln.departure || "").trim(),
-    arr: (pln.destination || "").trim(),
-    to_rwy: (pln.to_rwy_hint || "").trim(),
-    ld_rwy: (pln.ld_rwy_hint || "").trim(),
-
-    start_pos: "GATE",
-    spawn_id: "0",
-    arr_parking: "0",
-    seed: "",
-
-    metar_mode: "CUSTOM",
-    weather: "CLEAR",
-    wind_dir: 98,
-    wind_spd: 25,
-    fog_pct: 15,
-    snow_cov: "NONE",
-    temp_c: 16,
-    clouds: "NO SIGNIFICANT CLOUD",
-    cloud_base_ft: 22565,
-    turb_pct: 67,
-    qnh: 1013,
-    vis_m: 9999,
-
-    cruise_ft: (pln.cruise_ft!=null ? Number(pln.cruise_ft) : 12000)
+    return { kind: variant, name: docName, dep: depGuess, arr: arrGuess, points: pts, raw_xml: kmlText };
   };
 
-  const {tabs, panels} = makeTabs(["GENERAL","DATE/TIME","AIRCRAFT","FLIGHT PLAN","METAR"]);
-  uiArea.appendChild(tabs);
+  /* ------------------------------------------------------------------------
+     6. Input auto‑detection
+  ------------------------------------------------------------------------ */
+  const detectInputKind = text => {
+    const t = String(text??'').trim();
+    if(!t) return null;
+    if(t.startsWith('{') && t.includes('"J_FlightPlan"')) return 'RFS';
+    if(t.trimStart().startsWith('<') && t.toLowerCase().includes('<kml')) return 'KML';
+    if(t.toLowerCase().includes('[flightplan]') || t.includes('<SimBase') || t.trimStart().startsWith('<')) return 'PLN';
+    if(t.startsWith('{')) {
+      try { const obj = JSON.parse(t); if(obj && typeof obj==='object' && !Array.isArray(obj) && ('J_FlightPlan' in obj)) return 'RFS'; } catch {}
+    }
+    return null;
+  };
 
-  // GENERAL
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldText("TITLE","title",state,{className:"full"}).wrap);
-    g.appendChild(fieldText("DESCR","descr",state,{className:"full"}).wrap);
-    g.appendChild(fieldText("TAGS","tags",state,{className:"full"}).wrap);
-    panels[0].appendChild(g);
-  }
+  /* ------------------------------------------------------------------------
+     7. Canonical RoutePack – unified intermediate model
+  ------------------------------------------------------------------------ */
+  const makeRoutePackFromPln = pln => {
+    const dep = String(pln.departure||'').trim();
+    const arr = String(pln.destination||'').trim();
+    let pts = pln.waypoints
+      .filter(w => w.lat!=null && w.lon!=null)
+      .map((w,i) => ({
+        lat: Number(w.lat),
+        lon: Number(w.lon),
+        alt_m: w.alt_m!=null ? Number(w.alt_m) : null,
+        ident: w.ident || `WP${i+1}`,
+        src_type: 'PLN_WP',
+        rwy_hint: w.rwy_hint || ''
+      }));
+    if(!pts.length) {
+      if(pln.dep_lla) pts.push({ lat:Number(pln.dep_lla[0]), lon:Number(pln.dep_lla[1]), alt_m:Number(pln.dep_lla[2]||0), ident:dep||'DEP', src_type:'PLN_DEP' });
+      if(pln.dst_lla) pts.push({ lat:Number(pln.dst_lla[0]), lon:Number(pln.dst_lla[1]), alt_m:Number(pln.dst_lla[2]||0), ident:arr||'ARR', src_type:'PLN_ARR' });
+    }
+    return {
+      dep, arr,
+      title: pln.title || '',
+      descr: pln.descr || '',
+      cruise_ft: pln.cruise_ft != null ? Number(pln.cruise_ft) : null,
+      to_rwy_hint: (pln.to_rwy_hint||'').trim(),
+      ld_rwy_hint: (pln.ld_rwy_hint||'').trim(),
+      points: pts,
+      source_kind: 'PLN'
+    };
+  };
 
-  // DATE/TIME
-  {
-    const g = el("div",{class:"grid"});
-    const dt = fieldSelect("DATE/TIME","dt_mode",state,["CUSTOM","REAL"],{
-      className:"small",
-      onChange:(v)=>{
-        isoInput.input.disabled = (v==="REAL");
-        if(v==="REAL") state.custom_iso = nowUtcIso();
+  const makeRoutePackFromRfs = rfsPack => {
+    const dep = String(rfsPack.dep||'').trim();
+    const arr = String(rfsPack.arr||'').trim();
+    const pts = rfsPack.points
+      .filter(p => p.lat!=null && p.lon!=null)
+      .map((p,i) => ({
+        lat: Number(p.lat),
+        lon: Number(p.lon),
+        alt_m: p.alt_m!=null ? Number(p.alt_m) : null,
+        ident: p.ident || `P${i+1}`,
+        src_type: 'RFS_FPPOINT',
+        rfs_type: p.type,
+        rfs_isAirport: Boolean(p.isAirport),
+        rfs_airport: String(p.Airport||'').trim(),
+        isRunway: (p.type === CONST.RFS.WAYPOINT_TYPE.RUNWAY && String(p.ident||'').toUpperCase().startsWith('RW'))
+      }));
+    return {
+      dep, arr,
+      title: rfsPack.rfs?.Title || '',
+      descr: rfsPack.rfs?.Description || '',
+      to_rwy_hint: (rfsPack.to_rwy||'').trim(),
+      ld_rwy_hint: (rfsPack.ld_rwy||'').trim(),
+      points: pts,
+      source_kind: 'RFS'
+    };
+  };
+
+  const makeRoutePackFromKml = kmlPack => ({
+    dep: String(kmlPack.dep||'').trim(),
+    arr: String(kmlPack.arr||'').trim(),
+    title: String(kmlPack.name||'').trim(),
+    descr: '',
+    to_rwy_hint: '',
+    ld_rwy_hint: '',
+    points: kmlPack.points.map((p,i) => ({
+      lat: Number(p.lat),
+      lon: Number(p.lon),
+      alt_m: p.alt_m != null ? Number(p.alt_m) : null,
+      ident: `P${i+1}`,
+      src_type: kmlPack.kind
+    })),
+    source_kind: kmlPack.kind
+  });
+
+  /* ------------------------------------------------------------------------
+     8. Helpers: coordinate formatting, runway parsing, altitude policy
+  ------------------------------------------------------------------------ */
+  const decToDms = (dec, isLat=true) => {
+    const hemiPos = isLat ? 'N' : 'E', hemiNeg = isLat ? 'S' : 'W';
+    const hemi = dec >= 0 ? hemiPos : hemiNeg;
+    const x = Math.abs(Number(dec));
+    const deg = Math.floor(x);
+    const mFloat = (x - deg) * 60;
+    const minute = Math.floor(mFloat);
+    const sec = (mFloat - minute) * 60;
+    return { hemi, deg, minute, sec };
+  };
+  const formatDms = (dec, isLat=true) => {
+    const { hemi, deg, minute, sec } = decToDms(dec, isLat);
+    return `${hemi}${deg}° ${minute}' ${sec.toFixed(2)}"`;
+  };
+  const formatDmStar = (dec, isLat=true) => {
+    const { hemi, deg, minute, sec } = decToDms(dec, isLat);
+    const minutesDecimal = minute + sec/60;
+    return `${hemi}${deg}* ${minutesDecimal.toFixed(2)}'`;
+  };
+  const formatAltFt = alt_m => {
+    const altFt = mToFeet(alt_m ?? 0);
+    const sign = altFt >= 0 ? '+' : '-';
+    return `${sign}${Math.abs(altFt).toFixed(2).padStart(9,'0')}`;
+  };
+  const toWorldposStr = (lat, lon, alt_m) => `${formatDms(lat,true)},${formatDms(lon,false)},${formatAltFt(alt_m)}`;
+  const toIniCoordStr = (lat, lon, alt_m) => `${formatDmStar(lat,true)}, ${formatDmStar(lon,false)}, ${formatAltFt(alt_m)}`;
+
+  const parseRwyString = rwy => {
+    const s = String(rwy||'').trim().toUpperCase();
+    if(!s) return ['',''];
+    const m = s.match(/^(\d{1,2})([LRC])?$/);
+    if(!m) return [s,''];
+    const num = String(parseInt(m[1],10)).padStart(2,'0');
+    const des = m[2] || '';
+    const map = { L:'LEFT', R:'RIGHT', C:'CENTER' };
+    return [num, map[des] || ''];
+  };
+
+  const applyAltitudePolicy = (points, policy) => points.map(p => {
+    let alt = p.alt_m != null ? Number(p.alt_m) : null;
+    if(policy === 'IGNORE') alt = 0;
+    else if(policy === 'CLAMP') {
+      if(alt == null) alt = 0;
+      alt = clamp(alt, 0, CONST.KML.MAX_ALT_CLAMP);
+    } else if(policy === 'KEEP') {
+      if(alt == null) alt = 0;
+    }
+    return { ...p, alt_m: alt };
+  });
+
+  const firstCoordFromRoute = route => {
+    for(const p of route.points) if(p.lat!=null && p.lon!=null) return [p.lat, p.lon, p.alt_m ?? 0];
+    return [0,0,0];
+  };
+  const lastCoordFromRoute = route => {
+    for(let i=route.points.length-1; i>=0; i--) {
+      const p = route.points[i];
+      if(p.lat!=null && p.lon!=null) return [p.lat, p.lon, p.alt_m ?? 0];
+    }
+    return [0,0,0];
+  };
+  const extractRoutePointsFromRoute = route => route.points.filter(p => p.lat!=null && p.lon!=null).filter(p => !p.isRunway);
+
+  /* ------------------------------------------------------------------------
+     9. RFS generator – semantic constants used
+  ------------------------------------------------------------------------ */
+  const buildFpPointsFromRoute = (route, dep, arr, to_rwy, ld_rwy, cruise_ft) => {
+    const notes = [], fp_points = [];
+    const routePts = route.points.filter(p => p.lat!=null && p.lon!=null).filter(p => !p.isRunway);
+    if(to_rwy) {
+      const [lat,lon,alt_m] = routePts.length ? [routePts[0].lat, routePts[0].lon, routePts[0].alt_m ?? 0] : firstCoordFromRoute(route);
+      fp_points.push({
+        Altitude: Number(alt_m), Speed: 0, IsProcedure: true, Airport: dep,
+        Coords: { m_Latitude: Number(lat), m_Longitude: Number(lon) },
+        ident: `RW${to_rwy}`, type: CONST.RFS.WAYPOINT_TYPE.RUNWAY,
+        isAirport: true, IconId: CONST.RFS.ICON_ID.RUNWAY, Description: 'RUNWAY'
+      });
+    }
+    let dropped = 0;
+    routePts.forEach((wp,i) => {
+      const { lat, lon, ident, alt_m } = wp;
+      if(lat==null || lon==null) { dropped++; return; }
+      let alt = alt_m;
+      if(alt == null) alt = isFiniteNumber(cruise_ft) ? feetToM(cruise_ft) : 0;
+      fp_points.push({
+        Altitude: Number(alt), Speed: 0, IsProcedure: true, Airport: '',
+        Coords: { m_Latitude: Number(lat), m_Longitude: Number(lon) },
+        ident: ident || `WP${i+1}`, type: CONST.RFS.WAYPOINT_TYPE.GPS_WP,
+        isAirport: false, IconId: CONST.RFS.ICON_ID.GPS_WP, Description: 'GPS-WP'
+      });
+    });
+    if(dropped) notes.push(`⚠ Dropped ${dropped} point(s) without coordinates`);
+    if(ld_rwy) {
+      const [lat,lon,alt_m] = routePts.length ? [routePts.at(-1).lat, routePts.at(-1).lon, routePts.at(-1).alt_m ?? 0] : lastCoordFromRoute(route);
+      fp_points.push({
+        Altitude: Number(alt_m), Speed: 0, IsProcedure: true, Airport: arr,
+        Coords: { m_Latitude: Number(lat), m_Longitude: Number(lon) },
+        ident: `RW${ld_rwy}`, type: CONST.RFS.WAYPOINT_TYPE.RUNWAY,
+        isAirport: true, IconId: CONST.RFS.ICON_ID.RUNWAY, Description: 'RUNWAY'
+      });
+    }
+    if(!fp_points.length) throw new Error('No FPPoints generated');
+    return { fp_points, notes };
+  };
+
+  const buildUniformWeather = state => {
+    let { weather, clouds, wind_dir, wind_spd, temp_c, cloud_base_ft, turb_pct, fog_pct, snow_cov, qnh, vis_m } = state;
+    if(weather === 'CLEAR') fog_pct = 0;
+    else { clouds = 'OVERCAST'; fog_pct = Math.max(5, fog_pct); }
+    return {
+      COORDS: { m_Latitude: 45, m_Longitude: 0 },
+      Wind: Number(wind_spd),
+      m_Coords: { m_Latitude: 45, m_Longitude: 0 },
+      Ident: '',
+      WeatherType: CONST.RFS.WEATHER[weather],
+      CloudType: CONST.RFS.CLOUD[clouds],
+      CloudsBase: feetToM(cloud_base_ft),
+      QNH: parseInt(qnh,10),
+      _wind: Number(wind_spd),
+      WindDirection: Number(wind_dir),
+      TurbulenceNormalized: clamp01(Number(turb_pct)/100),
+      RefAltitude: 0,
+      Temperature: Number(temp_c),
+      DevTemperature: 0,
+      FogIntensityNormalized: clamp01(Number(fog_pct)/100),
+      SnowCoverage: CONST.RFS.SNOW_COVER[snow_cov],
+      VisibilityMeters: Number(vis_m)
+    };
+  };
+
+  const buildLivery = state => {
+    const aircraft_id = (state.liv_aircraft_id || 'A320N').trim() || 'A320N';
+    const liv_id = (state.liv_id || 'DEFAULT').trim() || 'DEFAULT';
+    const liv_name = (state.liv_name || liv_id).trim() || liv_id;
+    const liv_by = (state.liv_by || 'Rortos').trim() || 'Rortos';
+    const liv_ver = parseInt(state.liv_ver,10) || 0;
+    const liv_type = parseInt(state.liv_type,10) || 0;
+    const liv_date = parseInt(state.liv_date,10) || 0;
+    const liv_fav = Boolean(state.liv_fav);
+    return {
+      AircraftID: aircraft_id, ID: liv_id, Version: liv_ver, Type: liv_type,
+      By: liv_by, Date: liv_date, IsFavorite: liv_fav, Fps: 0, Name: liv_name,
+      '<AircraftID>k__BackingField': aircraft_id,
+      '<ID>k__BackingField': liv_id,
+      '<Version>k__BackingField': liv_ver,
+      '<Type>k__BackingField': liv_type,
+      '<By>k__BackingField': liv_by,
+      '<Date>k__BackingField': liv_date,
+      '<IsFavorite>k__BackingField': liv_fav,
+      m_Fps: 0, m_Name: liv_name
+    };
+  };
+
+  const buildRfsFromRoute = (route, state) => {
+    const notes = [];
+    const title = state.title ?? '';
+    const descr = state.descr ?? '';
+    const tags = state.tags ?? '';
+    const date_is_real = state.dt_mode === 'REAL';
+    const activity_date = date_is_real ? nowUtcIso() : (state.custom_iso?.trim() || nowUtcIso());
+    const livery = buildLivery(state);
+    const aircraft_id = livery.AircraftID;
+    const aircraft_load = {
+      FuelQuantityNormalized: clamp01(Number(state.fuel_pct)/100),
+      PassengersNumber: parseInt(state.pax,10),
+      CargoLoad: parseInt(state.cargo_kg,10),
+      MealsLoad: 0
+    };
+    const dep = String(state.dep||'').trim();
+    const arr = String(state.arr||'').trim();
+    if(!dep || !arr) throw new Error('Departure / arrival cannot be empty');
+    const to_rwy = String(state.to_rwy||'').trim();
+    const ld_rwy = String(state.ld_rwy||'').trim();
+    const cruise_ft = Number(state.cruise_ft);
+
+    const { fp_points, notes: fpNotes } = buildFpPointsFromRoute(route, dep, arr, to_rwy, ld_rwy, cruise_ft);
+    notes.push(...fpNotes);
+
+    const j_flight_plan_obj = {
+      selectedIdx: 0,
+      fPSingleSerializerList: [{
+        J_FPDepartureAirport: dep,
+        J_FPArrivalAirport: arr,
+        J_AssignedTakeoffRunway: to_rwy,
+        J_AssignedLandingRunway: ld_rwy,
+        J_Sid: '', J_SidTransition: '',
+        J_Star: '', J_Approach: '', J_ApproachTransition: '',
+        FPPoints: fp_points,
+        J_ArrivalAirportParkingPoint: String(state.arr_parking || '0').trim() || '0'
+      }]
+    };
+
+    const [dep_lat, dep_lon] = firstCoordFromRoute(route);
+    const spawn_id = String(state.spawn_id || '0').trim() || '0';
+    const departure_gate = state.start_pos === 'GATE';
+
+    let seed;
+    if(String(state.seed||'').trim() === '') {
+      seed = Math.floor(1 + Math.random() * 2147483646);
+      notes.push(`🎲 Auto‑generated seed: ${seed}`);
+    } else {
+      seed = parseInt(String(state.seed).trim(), 10);
+    }
+
+    const uniform_weather = buildUniformWeather(state);
+    const flight_activity_weather = CONST.RFS.METAR_MODE[state.metar_mode];
+
+    const rfs = {
+      Livery: livery,
+      StartType: 0,
+      LevelConfig: {
+        LevelName: 'Simulator', TutorialID: null, TutorialCheckpointStepIndex: 0, TutorialCheckpointPreferences: null,
+        '<LevelName>k__BackingField': 'Simulator', '<TutorialID>k__BackingField': null,
+        '<TutorialCheckpointStepIndex>k__BackingField': 0, '<TutorialCheckpointPreferences>k__BackingField': null
+      },
+      Title: title,
+      Description: descr,
+      Tags: tags,
+      AircraftLoad: aircraft_load,
+      m_livery: livery,
+      InitialSpeed: 0,
+      m_InitialPosition: { m_Latitude: 2000, m_Longitude: 2000 },
+      InitialAltitude: 0,
+      InitialHeading: 0,
+      InitialWaypointIdent: '',
+      DepartureGate: departure_gate,
+      SpawnPoint: {
+        Coords: { m_Latitude: Number(dep_lat), m_Longitude: Number(dep_lon) },
+        Type: 1,
+        ID: spawn_id,
+        m_groundPointCoords: { m_Latitude: Number(dep_lat), m_Longitude: Number(dep_lon) }
+      },
+      ProNeeded: Boolean(state.pro_needed),
+      Seed: seed,
+      J_AircraftID: aircraft_id,
+      J_StartReferenceAirportID: dep,
+      J_FlightPlan: JSON.stringify(j_flight_plan_obj),
+      ActivityType: 0,
+      FlightActivityWeather: flight_activity_weather,
+      UniformWeather: uniform_weather,
+      ActivityDate: activity_date,
+      DateIsReal: date_is_real,
+      ActivityHandlerCheckersManager: {
+        DepartureAirportsCheckersManagers: { EveryCheckPassedInOR: true, EveryCheckPassedInAND: true, NumbersOfCheck: 0, m_Checkers: [] },
+        ArrivalAirportsCheckersManagers: { EveryCheckPassedInOR: true, EveryCheckPassedInAND: true, NumbersOfCheck: 0, m_Checkers: [] },
+        '<DepartureAirportsCheckersManagers>k__BackingField': { EveryCheckPassedInOR: true, EveryCheckPassedInAND: true, NumbersOfCheck: 0, m_Checkers: [] },
+        '<ArrivalAirportsCheckersManagers>k__BackingField': { EveryCheckPassedInOR: true, EveryCheckPassedInAND: true, NumbersOfCheck: 0, m_Checkers: [] }
+      }
+    };
+    return { rfs, notes };
+  };
+
+  /* ------------------------------------------------------------------------
+     10. PLN generators (XML / INI)
+  ------------------------------------------------------------------------ */
+  const prettyXmlString = (xmlString) => {
+    if(!xmlString) return '';
+    if(xmlString.length > 200000 || (xmlString.match(/\n/g)||[]).length > CONST.XML_PRETTY.MAX_LINES) {
+      return xmlString; // performance: skip pretty for huge files
+    }
+    const IND = CONST.XML_PRETTY.INDENT;
+    let xml = String(xmlString).replace(/(>)(<)(\/*)/g, '$1\n$2$3');
+    const lines = xml.split('\n').map(l=>l.trim()).filter(Boolean);
+    let pad = 0, out = [];
+    for(const line of lines) {
+      if(/^<\/.+>/.test(line)) pad = Math.max(pad-1, 0);
+      out.push(IND.repeat(pad) + line);
+      const isOpening = /^<[^!?/][^>]*>$/.test(line) && !/\/>$/.test(line) && !/^<[^>]+>.*<\/[^>]+>$/.test(line);
+      if(isOpening) pad++;
+    }
+    return out.join('\n') + '\n';
+  };
+  const withXmlDeclaration = prettyBody => {
+    const decl = '<?xml version="1.0" encoding="UTF-8"?>\n';
+    return String(prettyBody||'').startsWith('<?xml') ? prettyBody : decl + prettyBody;
+  };
+
+  const buildPlnXmlFromRoute = (route, state) => {
+    const dep = String(state.dep||'').trim(), arr = String(state.arr||'').trim();
+    const title = String(state.title||'').trim() || `${dep} to ${arr}`;
+    const descr = String(state.descr||'').trim() || `${dep} to ${arr} created by converter`;
+    const fp_type = state.fp_type, route_type = state.route_type;
+    const cruise_ft = Number(state.cruise_ft);
+    const to_rwy = String(state.to_rwy||'').trim(), ld_rwy = String(state.ld_rwy||'').trim();
+    const dep_name = String(state.dep_name||'').trim() || dep, arr_name = String(state.arr_name||'').trim() || arr;
+    const pts = extractRoutePointsFromRoute(route);
+    if(!pts.length) throw new Error('No usable route points (coordinates missing)');
+
+    const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = pts[0].alt_m ?? 0;
+    const arr_lat = pts.at(-1).lat, arr_lon = pts.at(-1).lon, arr_alt_m = pts.at(-1).alt_m ?? 0;
+    const [dep_rwy_num, dep_rwy_des] = parseRwyString(to_rwy);
+    const [arr_rwy_num, arr_rwy_des] = parseRwyString(ld_rwy);
+
+    const doc = document.implementation.createDocument(null, 'SimBase.Document', null);
+    const root = doc.documentElement;
+    root.setAttribute('Type', 'AceXML');
+    root.setAttribute('version', '1,0');
+
+    const descrEl = doc.createElement('Descr');
+    descrEl.textContent = 'AceXML Document';
+    root.appendChild(descrEl);
+
+    const fp = doc.createElement('FlightPlan.FlightPlan');
+    root.appendChild(fp);
+    const add = (name, txt) => { const el = doc.createElement(name); el.textContent = String(txt); fp.appendChild(el); return el; };
+    add('Title', title);
+    add('FPType', fp_type);
+    add('RouteType', route_type);
+    add('CruisingAlt', cruise_ft.toFixed(3));
+    add('DepartureID', dep);
+    add('DepartureLLA', toWorldposStr(dep_lat, dep_lon, dep_alt_m));
+    add('DestinationID', arr);
+    add('DestinationLLA', toWorldposStr(arr_lat, arr_lon, arr_alt_m));
+    add('Descr', descr);
+    add('DepartureName', dep_name);
+    add('DestinationName', arr_name);
+
+    const includeRwy = Boolean(state.include_rwy);
+    pts.forEach((p, i) => {
+      const isFirst = i===0, isLast = i===pts.length-1;
+      let wp_id, wp_type, ident;
+      if(isFirst) { wp_id = dep; wp_type = 'Airport'; ident = dep; }
+      else if(isLast) { wp_id = arr; wp_type = 'Airport'; ident = arr; }
+      else { wp_id = String(p.ident || `WP${i}`).trim() || `WP${i}`; wp_type = 'User'; ident = wp_id; }
+
+      const wpEl = doc.createElement('ATCWaypoint');
+      wpEl.setAttribute('id', wp_id);
+      const tEl = doc.createElement('ATCWaypointType');
+      tEl.textContent = wp_type;
+      wpEl.appendChild(tEl);
+      const wpos = doc.createElement('WorldPosition');
+      wpos.textContent = toWorldposStr(p.lat, p.lon, p.alt_m ?? feetToM(cruise_ft));
+      wpEl.appendChild(wpos);
+
+      if(includeRwy && isFirst && dep_rwy_num) {
+        const rn = doc.createElement('RunwayNumberFP');
+        rn.textContent = dep_rwy_num;
+        wpEl.appendChild(rn);
+        if(dep_rwy_des) {
+          const rd = doc.createElement('RunwayDesignatorFP');
+          rd.textContent = dep_rwy_des;
+          wpEl.appendChild(rd);
+        }
+      }
+      if(includeRwy && isLast && arr_rwy_num) {
+        const rn = doc.createElement('RunwayNumberFP');
+        rn.textContent = arr_rwy_num;
+        wpEl.appendChild(rn);
+        if(arr_rwy_des) {
+          const rd = doc.createElement('RunwayDesignatorFP');
+          rd.textContent = arr_rwy_des;
+          wpEl.appendChild(rd);
+        }
+      }
+      const icao = doc.createElement('ICAO');
+      const icaoIdent = doc.createElement('ICAOIdent');
+      icaoIdent.textContent = ident;
+      icao.appendChild(icaoIdent);
+      wpEl.appendChild(icao);
+      fp.appendChild(wpEl);
+    });
+    const raw = new XMLSerializer().serializeToString(doc);
+    return withXmlDeclaration(prettyXmlString(raw));
+  };
+
+  const buildPlnIniFromRoute = (route, state) => {
+    const dep = String(state.dep||'').trim(), arr = String(state.arr||'').trim();
+    const title = String(state.title||'').trim() || `${dep} to ${arr}`;
+    const descr = String(state.descr||'').trim() || `${dep}, ${arr}`;
+    const fp_type = state.fp_type;
+    const routetype = CONST.PLN.INI_ROUTETYPE[state.route_type] || 2;
+    const cruise_ft = parseInt(state.cruise_ft,10);
+    const pts = extractRoutePointsFromRoute(route);
+    if(!pts.length) throw new Error('No usable route points');
+    const dep_lat = pts[0].lat, dep_lon = pts[0].lon, dep_alt_m = pts[0].alt_m ?? 0;
+    const arr_lat = pts.at(-1).lat, arr_lon = pts.at(-1).lon, arr_alt_m = pts.at(-1).alt_m ?? 0;
+    const dep_name = String(state.dep_name||'').trim() || dep;
+    const arr_name = String(state.arr_name||'').trim() || arr;
+
+    const lines = [
+      '[flightplan]',
+      `title=${title}`,
+      `description=${descr}`,
+      `type=${fp_type}`,
+      `routetype=${routetype}`,
+      `cruising_altitude=${String(cruise_ft).padStart(CONST.PLN.CRUISE_ALT_PAD,'0')}`,
+      `departure_id=${dep}, ${toIniCoordStr(dep_lat, dep_lon, dep_alt_m)}`,
+      `destination_id=${arr}, ${toIniCoordStr(arr_lat, arr_lon, arr_alt_m)}`,
+      `departure_name=${dep_name}`,
+      `destination_name=${arr_name}`
+    ];
+    pts.forEach((p,i) => {
+      const isFirst = i===0, isLast = i===pts.length-1;
+      let ident, tletter;
+      if(isFirst) { ident=dep; tletter='A'; }
+      else if(isLast) { ident=arr; tletter='A'; }
+      else {
+        ident = String(p.ident || `WP${i}`).trim() || `WP${i}`;
+        tletter = /^[A-Z]{3}$/.test(ident) ? 'V' : 'U';
+      }
+      lines.push(`waypoint.${i}=${ident}, ${tletter}, ${toIniCoordStr(p.lat, p.lon, p.alt_m ?? feetToM(cruise_ft))},`);
+    });
+    return lines.join('\n');
+  };
+
+  /* ------------------------------------------------------------------------
+     11. KML generators (GIS / RFS‑enhanced)
+  ------------------------------------------------------------------------ */
+  const kmlCoord = (lon, lat, alt) => {
+    const prec = CONST.KML.DEFAULT_PRECISION;
+    return `${Number(lon).toFixed(prec)},${Number(lat).toFixed(prec)},${Math.round(Number(alt??0))}`;
+  };
+
+  const inferTocTod = points => {
+    const alts = points.map(p => Number(p.alt_m ?? 0));
+    if(alts.length < 3) return { tocIdx: null, todIdx: null };
+    let maxAlt = -Infinity;
+    alts.forEach(a => { if(Number.isFinite(a)) maxAlt = Math.max(maxAlt, a); });
+    if(!Number.isFinite(maxAlt) || maxAlt <= 0) return { tocIdx: null, todIdx: null };
+    const eps = 1e-6;
+    let firstMax = null, lastMax = null;
+    alts.forEach((a,i) => { if(Math.abs(a - maxAlt) <= eps) { if(firstMax===null) firstMax=i; lastMax=i; } });
+    if(firstMax === null) return { tocIdx: null, todIdx: null };
+    let tod = null;
+    if(lastMax !== null && lastMax > firstMax) {
+      tod = lastMax;
+    } else {
+      const thresh = Math.max(CONST.KML.TOC_TOD_MIN_FT, CONST.KML.TOC_TOD_THRESHOLD_RATIO * maxAlt);
+      for(let i=firstMax+1; i<alts.length; i++) {
+        if(maxAlt - alts[i] >= thresh) { tod = Math.max(i-1, firstMax+1); break; }
+      }
+    }
+    if(tod === firstMax) tod = null;
+    return { tocIdx: firstMax, todIdx: tod };
+  };
+
+  const kmlFixPlacemark = (name, desc, lon, lat, alt) => `<Placemark>
+<name>${escapeHtml(name)}</name>
+<styleUrl>#FixMark</styleUrl>
+<description>${escapeHtml(desc)}</description>
+<Point>
+<altitudeMode>absolute</altitudeMode>
+<coordinates>${kmlCoord(lon, lat, alt)}</coordinates>
+</Point>
+</Placemark>`;
+
+  const buildKmlGisFromRoute = (route, state) => {
+    const dep = String(state.dep||route.dep||'').trim();
+    const arr = String(state.arr||route.arr||'').trim();
+    const name = String(state.kml_name || `Track: ${dep} - ${arr}`).trim();
+    const pts = applyAltitudePolicy(extractRoutePointsFromRoute(route), state.kml_alt_policy);
+    if(!pts.length) throw new Error('No points for KML');
+    const coordLines = pts.map(p => kmlCoord(p.lon, p.lat, p.alt_m)).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>${escapeHtml(name)}</name>
+<Placemark>
+<name>${escapeHtml(`${dep} - ${arr}`.trim() || 'Track')}</name>
+<LineString>
+<tessellate>1</tessellate>
+<coordinates>
+${coordLines}
+</coordinates>
+</LineString>
+</Placemark>
+</Document>
+</kml>`;
+  };
+
+  const buildKmlRfsFromRoute = (route, state) => {
+    const dep = String(state.dep||route.dep||'').trim();
+    const arr = String(state.arr||route.arr||'').trim();
+    const docName = String(state.kml_name || `${dep} to ${arr}`).trim();
+    const desc = String(state.descr || route.descr || `${dep} to ${arr}, generated by converter`).trim();
+    const rawPts0 = extractRoutePointsFromRoute(route);
+    const pts = applyAltitudePolicy(rawPts0, state.kml_alt_policy);
+    if(!pts.length) throw new Error('No points for KML');
+    const routeCoords = pts.map(p => kmlCoord(p.lon, p.lat, p.alt_m)).join('\n');
+    const styles = `
+<Style id="RouteMark">
+<LineStyle><color>ddff40fc</color><width>6</width></LineStyle>
+<PolyStyle><color>77ff40fc</color></PolyStyle>
+</Style>
+<Style id="FixMark">
+<IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/shapes/triangle.png</href></Icon></IconStyle>
+<color>ffffffff</color>
+</Style>`.trim();
+    const routePm = `<Placemark>
+<name>Route</name>
+<styleUrl>#RouteMark</styleUrl>
+<LineString>
+<tessellate>1</tessellate>
+<extrude>1</extrude>
+<altitudeMode>absolute</altitudeMode>
+<coordinates>
+${routeCoords}
+</coordinates>
+</LineString>
+</Placemark>`;
+    const depPt = pts[0], arrPt = pts.at(-1);
+    const fixPlacemarks = [];
+    if(dep) fixPlacemarks.push(kmlFixPlacemark(dep, `${dep} (Airport)`, depPt.lon, depPt.lat, depPt.alt_m));
+    const { tocIdx, todIdx } = inferTocTod(pts);
+    if(tocIdx != null) {
+      const p = pts[tocIdx];
+      fixPlacemarks.push(kmlFixPlacemark('T_O_C', 'T_O_C - Top of Climb', p.lon, p.lat, p.alt_m));
+    }
+    if(todIdx != null) {
+      const p = pts[todIdx];
+      fixPlacemarks.push(kmlFixPlacemark('T_O_D', 'T_O_D - Top of Descent', p.lon, p.lat, p.alt_m));
+    }
+    const seen = new Set([dep.toUpperCase(), arr.toUpperCase(), 'T_O_C', 'T_O_D']);
+    let added = 0;
+    for(const p of pts) {
+      const nm = String(p.ident || '').trim().toUpperCase();
+      if(!nm || seen.has(nm) || /^P\d+$/.test(nm) || nm.startsWith('RW')) continue;
+      const kind = p.rfs_isAirport ? 'Airport' : 'Fix';
+      fixPlacemarks.push(kmlFixPlacemark(nm, `${nm} (${kind})`, p.lon, p.lat, p.alt_m));
+      seen.add(nm);
+      if(++added >= 8) break;
+    }
+    if(arr) fixPlacemarks.push(kmlFixPlacemark(arr, `${arr} (Airport)`, arrPt.lon, arrPt.lat, arrPt.alt_m));
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>${escapeHtml(docName)}</name>
+<description>${escapeHtml(desc)}</description>
+${styles}
+${routePm}
+${fixPlacemarks.join('\n')}
+</Document>
+</kml>`;
+  };
+
+  /* ------------------------------------------------------------------------
+     12. UI builder – no globals, centralised state
+  ------------------------------------------------------------------------ */
+  let lastOutput = { text: '', filename: 'output.txt', mime: 'text/plain' };
+
+  const hideOutput = () => {
+    const outArea = document.getElementById('outputArea');
+    outArea?.classList.add('hidden');
+    document.getElementById('outputBox').value = '';
+    document.getElementById('outKind').textContent = '—';
+    document.getElementById('outHint').textContent = '';
+    document.getElementById('outFileName').textContent = '—';
+    lastOutput = { text:'', filename:'output.txt', mime:'text/plain' };
+  };
+
+  const showOutput = (text, kindLabel, hint, filename, mime) => {
+    const outArea = document.getElementById('outputArea');
+    outArea.classList.remove('hidden');
+    document.getElementById('outKind').textContent = kindLabel;
+    document.getElementById('outputBox').value = text;
+    document.getElementById('outHint').textContent = hint || '';
+    lastOutput = { text, filename: filename || 'output.txt', mime: mime || 'text/plain' };
+    document.getElementById('outFileName').textContent = lastOutput.filename;
+  };
+
+  const el = (tag, attrs={}, children=[]) => {
+    const e = document.createElement(tag);
+    for(const [k,v] of Object.entries(attrs)) {
+      if(k === 'class') e.className = v;
+      else if(k === 'html') e.innerHTML = v;
+      else if(k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v);
+    }
+    for(const c of children) {
+      if(c == null) continue;
+      if(typeof c === 'string') e.appendChild(document.createTextNode(c));
+      else e.appendChild(c);
+    }
+    return e;
+  };
+
+  const makeTabs = (tabNames) => {
+    const tabs = el('div', { class: 'tabs' });
+    const bar = el('div', { class: 'tabbar' });
+    const panels = tabNames.map(() => el('div', { class: 'tabpanel' }));
+    const buttons = [];
+    const activate = (i) => {
+      buttons.forEach(b => b.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      if(buttons[i]) buttons[i].classList.add('active');
+      if(panels[i]) panels[i].classList.add('active');
+    };
+    tabNames.forEach((name, i) => {
+      const b = el('button', { html: escapeHtml(name) });
+      b.dataset.tabIndex = String(i);
+      b.addEventListener('click', () => activate(i));
+      bar.appendChild(b);
+      buttons.push(b);
+    });
+    tabs.appendChild(bar);
+    panels.forEach(p => tabs.appendChild(p));
+    activate(0);
+    return { tabs, panels, buttons, activate };
+  };
+
+  const fieldText = (label, key, state, opts={}) => {
+    const input = el('input', { type:'text', value: state[key] ?? '', placeholder: opts.placeholder ?? '' });
+    input.addEventListener('input', () => { state[key] = input.value; opts.onChange?.(input.value, input); });
+    return { wrap: el('div', { class: 'field '+(opts.className||'') }, [el('label', { html: escapeHtml(label) }), input]), input };
+  };
+  const fieldNumber = (label, key, state, opts={}) => {
+    const input = el('input', { type:'number', value: state[key], min: opts.min, max: opts.max, step: opts.step ?? '1' });
+    input.addEventListener('input', () => { state[key] = input.value; opts.onChange?.(input.value, input); });
+    return { wrap: el('div', { class: 'field '+(opts.className||'') }, [el('label', { html: escapeHtml(label) }), input]), input };
+  };
+  const fieldSelect = (label, key, state, options, opts={}) => {
+    const select = el('select', {});
+    options.forEach(o => { select.appendChild(el('option', { value: o, html: escapeHtml(o) })); });
+    select.value = state[key];
+    select.addEventListener('change', () => { state[key] = select.value; opts.onChange?.(select.value, select); });
+    return { wrap: el('div', { class: 'field '+(opts.className||'') }, [el('label', { html: escapeHtml(label) }), select]), select };
+  };
+  const fieldCheckbox = (label, key, state, opts={}) => {
+    const input = el('input', { type:'checkbox' });
+    input.checked = Boolean(state[key]);
+    input.addEventListener('change', () => { state[key] = input.checked; opts.onChange?.(input.checked, input); });
+    const row = el('div', { class: 'inline' }, [ input, el('span', { html: `<strong>${escapeHtml(label)}</strong>` }) ]);
+    return { wrap: el('div', { class: 'field '+(opts.className||'') }, [row]), input };
+  };
+  const fieldRange = (label, key, state, opts={}) => {
+    const range = el('input', { type:'range', min:opts.min, max:opts.max, step:opts.step ?? '1', value: state[key] });
+    const valueSpan = el('span', { class: 'pill', html: escapeHtml(String(state[key])) });
+    range.addEventListener('input', () => {
+      state[key] = Number(range.value);
+      valueSpan.textContent = String(state[key]);
+      opts.onInput?.(state[key], range);
+    });
+    const top = el('div', { class: 'inline' }, [ el('span', { html: `<strong>${escapeHtml(label)}</strong>` }), valueSpan ]);
+    return { wrap: el('div', { class: 'field '+(opts.className||'') }, [top, range]), range, valueSpan };
+  };
+
+  /* ------------------------------------------------------------------------
+     13. Main UI renderer – builds everything from a RoutePack
+  ------------------------------------------------------------------------ */
+  const renderUnifiedUi = (route, sourceLabel) => {
+    const uiArea = document.getElementById('uiArea');
+    uiArea.innerHTML = '';
+    uiArea.classList.remove('hidden');
+    hideOutput();
+
+    const state = {
+      dep: (route.dep || '').trim(),
+      arr: (route.arr || '').trim(),
+      title: (route.title || '').trim(),
+      descr: (route.descr || '').trim(),
+      tags: '',
+      target: '— Select target format —',
+      dt_mode: 'CUSTOM',
+      custom_iso: nowUtcIso(),
+      liv_aircraft_id: 'A320N',
+      liv_id: 'DEFAULT',
+      liv_name: 'DEFAULT',
+      liv_by: 'Rortos',
+      liv_ver: 2,
+      liv_type: 0,
+      liv_date: 1600387200,
+      liv_fav: false,
+      fuel_pct: 37,
+      pax: 139,
+      cargo_kg: 9205,
+      pro_needed: true,
+      to_rwy: (route.to_rwy_hint || '').trim(),
+      ld_rwy: (route.ld_rwy_hint || '').trim(),
+      start_pos: 'GATE',
+      spawn_id: '0',
+      arr_parking: '0',
+      seed: '',
+      metar_mode: 'CUSTOM',
+      weather: 'CLEAR',
+      wind_dir: 98,
+      wind_spd: 25,
+      fog_pct: 15,
+      snow_cov: 'NONE',
+      temp_c: 16,
+      clouds: 'NO SIGNIFICANT CLOUD',
+      cloud_base_ft: 22565,
+      turb_pct: 67,
+      qnh: 1013,
+      vis_m: 9999,
+      cruise_ft: route.cruise_ft != null ? Number(route.cruise_ft) : 12000,
+      fp_type: 'IFR',
+      route_type: 'LowAlt',
+      dep_name: '',
+      arr_name: '',
+      include_rwy: true,
+      kml_name: '',
+      kml_alt_policy: 'KEEP'
+    };
+
+    // Smart default output format
+    if (route.source_kind === 'PLN') state.target = 'PLN XML (.pln)';
+    else if (route.source_kind === 'RFS') state.target = 'RFS (.rfs)';
+    else if (route.source_kind.includes('KML')) state.target = 'KML File -- GIS Software Supported (.kml)';
+
+    const tabsObj = makeTabs(['CONVERT', 'RFS OPTIONS', 'PLN OPTIONS', 'KML OPTIONS', 'ROUTE INFO']);
+    const { tabs, panels, buttons, activate } = tabsObj;
+    uiArea.appendChild(tabs);
+
+    let plnXmlOnlyWrap = null, plnModeBadge = null;
+
+    const setTabVisible = (idx, visible) => {
+      const b = buttons[idx], p = panels[idx];
+      if(!b || !p) return;
+      b.classList.toggle('hidden', !visible);
+      p.classList.toggle('hidden', !visible);
+      if(!visible && b.classList.contains('active')) activate(0);
+    };
+
+    const updatePlnUiForTarget = () => {
+      const tgt = String(state.target || '');
+      const isPlnXml = tgt.startsWith('PLN XML');
+      const isPlnIni = tgt.startsWith('PLN INI');
+      if(plnModeBadge) {
+        if(isPlnXml) plnModeBadge.textContent = 'Mode: XML (AceXML)';
+        else if(isPlnIni) plnModeBadge.textContent = 'Mode: INI ([flightplan])';
+        else plnModeBadge.textContent = 'Mode: —';
+      }
+      if(plnXmlOnlyWrap) plnXmlOnlyWrap.classList.toggle('hidden', !isPlnXml);
+    };
+
+    const updateTabVisibility = () => {
+      const tgt = String(state.target || '');
+      const none = tgt.startsWith('—') || tgt.trim() === '';
+      const isRfs = tgt.startsWith('RFS');
+      const isPln = tgt.startsWith('PLN');
+      const isKml = tgt.startsWith('KML');
+      setTabVisible(0, true);
+      setTabVisible(1, !none && isRfs);
+      setTabVisible(2, !none && isPln);
+      setTabVisible(3, !none && isKml);
+      setTabVisible(4, true);
+      updatePlnUiForTarget();
+    };
+
+    // ----- CONVERT tab -----
+    {
+      const g = el('div', { class: 'grid' });
+      g.appendChild(el('div', { class: 'field full', html: `<label>Detected Input</label><div class="inline"><span class="pill">${escapeHtml(sourceLabel)}</span><span class="pill">points: ${route.points.length}</span></div>` }));
+      const tgt = fieldSelect('TARGET FORMAT', 'target', state, CONST.UI.TARGETS, {
+        className: 'full',
+        onChange: () => { updateTabVisibility(); hideOutput(); }
+      });
+      g.appendChild(tgt.wrap);
+      g.appendChild(fieldText('Departure (ICAO)', 'dep', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Arrival (ICAO)', 'arr', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Title', 'title', state, { className: 'full' }).wrap);
+      g.appendChild(fieldText('Description', 'descr', state, { className: 'full' }).wrap);
+      g.appendChild(el('div', { class: 'field full', html: `<label>Notes</label><div class="inline"><span>All formats convert via internal RoutePack model.</span><span class="pill">KML altitudes in metres</span><span class="pill">PLN altitudes in feet formatting</span><span class="pill">RFS‑KML: RouteMark/FixMark, absolute alt, extrude</span></div>` }));
+      panels[0].appendChild(g);
+    }
+
+    // ----- RFS OPTIONS tab -----
+    {
+      const g = el('div', { class: 'grid' });
+      g.appendChild(fieldSelect('Date/Time mode', 'dt_mode', state, ['CUSTOM','REAL'], {
+        className: 'small',
+        onChange: (v) => { isoInput.input.disabled = (v==='REAL'); if(v==='REAL') state.custom_iso = nowUtcIso(); }
+      }).wrap);
+      const isoInput = fieldText('UTC ISO', 'custom_iso', state, { className: 'full' });
+      g.appendChild(isoInput.wrap);
+      g.appendChild(fieldText('Aircraft ID', 'liv_aircraft_id', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Livery ID', 'liv_id', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Livery Name', 'liv_name', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Livery By', 'liv_by', state, { className: 'small' }).wrap);
+      g.appendChild(fieldNumber('Version', 'liv_ver', state, { className: 'tiny', min:0, max:9999 }).wrap);
+      g.appendChild(fieldNumber('Type', 'liv_type', state, { className: 'tiny', min:0, max:50 }).wrap);
+      g.appendChild(fieldNumber('Unix Date', 'liv_date', state, { className: 'small', min:0, max:2147483647 }).wrap);
+      g.appendChild(fieldCheckbox('Is Favorite', 'liv_fav', state, { className: 'small' }).wrap);
+      g.appendChild(fieldRange('Fuel %', 'fuel_pct', state, { className: 'full', min:0, max:100 }).wrap);
+      g.appendChild(fieldRange('Pax', 'pax', state, { className: 'full', min:0, max:800 }).wrap);
+      g.appendChild(fieldRange('Cargo (kg)', 'cargo_kg', state, { className: 'full', min:0, max:200000, step:1 }).wrap);
+      g.appendChild(fieldCheckbox('Pro Needed', 'pro_needed', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Takeoff Runway', 'to_rwy', state, { className: 'small', placeholder:'e.g. 07L' }).wrap);
+      g.appendChild(fieldText('Landing Runway', 'ld_rwy', state, { className: 'small', placeholder:'e.g. 26R' }).wrap);
+      g.appendChild(fieldSelect('Start Position', 'start_pos', state, ['GATE','RUNWAY'], { className: 'small' }).wrap);
+      g.appendChild(fieldText('SpawnPoint ID', 'spawn_id', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Parking Point', 'arr_parking', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Seed', 'seed', state, { className: 'small', placeholder:'empty = auto' }).wrap);
+      g.appendChild(fieldRange('Cruise (ft)', 'cruise_ft', state, { className: 'full', min:0, max:45000, step:1 }).wrap);
+      g.appendChild(fieldSelect('METAR', 'metar_mode', state, ['CUSTOM','REAL','RANDOM'], { className: 'small' }).wrap);
+      
+      const weather = fieldSelect('Weather', 'weather', state, ['CLEAR','FOG','SNOW','RAIN','STORM'], {
+        className: 'small',
+        onChange: () => { enforceWeatherConstraints(state, { fog_pct: fog.range, clouds: cloud.select, turb_pct: turb.range }); }
+      });
+      g.appendChild(weather.wrap);
+
+      const windDir = fieldRange('Wind Dir', 'wind_dir', state, { className: 'full', min:0, max:359 });
+      const windSpd = fieldRange('Wind Speed (kt)', 'wind_spd', state, { className: 'full', min:0, max:40 });
+      g.appendChild(windDir.wrap); g.appendChild(windSpd.wrap);
+
+      const temp = fieldRange('Temp °C', 'temp_c', state, { className: 'full', min:-30, max:40 });
+      const qnh = fieldRange('QNH', 'qnh', state, { className: 'full', min:900, max:1100 });
+      const vis = fieldRange('Visibility (m)', 'vis_m', state, { className: 'full', min:1000, max:9999 });
+      g.appendChild(temp.wrap); g.appendChild(qnh.wrap); g.appendChild(vis.wrap);
+
+      const fog = fieldRange('Fog %', 'fog_pct', state, { className: 'full', min:0, max:100 });
+      const snow = fieldSelect('Snow Cover', 'snow_cov', state, ['NONE','LOW','MEDIUM','HIGH'], { className: 'small' });
+      g.appendChild(fog.wrap); g.appendChild(snow.wrap);
+
+      const cloud = fieldSelect('Clouds', 'clouds', state, ['NO SIGNIFICANT CLOUD','FEW CLOUDS','SCATTERED CLOUDS','BROKEN CLOUDS','OVERCAST'], { className: 'full' });
+      g.appendChild(cloud.wrap);
+
+      const base = fieldRange('Cloud Base (ft)', 'cloud_base_ft', state, { className: 'full', min:4500, max:45000 });
+      const turb = fieldRange('Turbulence %', 'turb_pct', state, { className: 'full', min:0, max:100 });
+      g.appendChild(base.wrap); g.appendChild(turb.wrap);
+
+      g.appendChild(el('div', { class: 'field full', html: `<label>Constraints</label><div class="inline">CLEAR → fog=0; non‑CLEAR → OVERCAST & fog≥5; STORM locks turbulence slider.</div>` }));
+      
+      const enforceWeatherConstraints = (s, els) => {
+        const w = s.weather;
+        if(w === 'CLEAR') { s.fog_pct = 0; els.fog_pct.disabled = true; els.clouds.disabled = false; }
+        else { s.clouds = 'OVERCAST'; els.clouds.disabled = true; els.fog_pct.disabled = false; if(s.fog_pct < 5) s.fog_pct = 5; }
+        els.turb_pct.disabled = (w === 'STORM');
+      };
+      enforceWeatherConstraints(state, { fog_pct: fog.range, clouds: cloud.select, turb_pct: turb.range });
+      fog.range.value = state.fog_pct; fog.valueSpan.textContent = String(state.fog_pct);
+      cloud.select.value = state.clouds;
+
+      panels[1].appendChild(g);
+    }
+
+    // ----- PLN OPTIONS tab (NO duplicate format selector) -----
+    {
+      const g = el('div', { class: 'grid' });
+      plnModeBadge = el('span', { class: 'pill' }, ['Mode: —']);
+      g.appendChild(el('div', { class: 'field full', html: `<label>PLN Output Mode</label>` }, [
+        el('div', { class: 'inline' }, [ plnModeBadge, el('span', { html: 'controlled by <strong>TARGET FORMAT</strong>' }) ])
+      ]));
+      g.appendChild(fieldSelect('FP Type', 'fp_type', state, ['IFR','VFR'], { className: 'tiny' }).wrap);
+      g.appendChild(fieldSelect('Route Type', 'route_type', state, ['LowAlt','HighAlt'], { className: 'tiny' }).wrap);
+      g.appendChild(fieldText('Departure Name', 'dep_name', state, { className: 'small' }).wrap);
+      g.appendChild(fieldText('Arrival Name', 'arr_name', state, { className: 'small' }).wrap);
+      const includeRwyField = fieldCheckbox('Include RunwayNumberFP (XML only)', 'include_rwy', state, { className: 'small' });
+      plnXmlOnlyWrap = includeRwyField.wrap;
+      g.appendChild(includeRwyField.wrap);
+      g.appendChild(el('div', { class: 'field full', html: `<label>Note</label><div class="inline"><span>PLN altitudes written in feet (automatic conversion from internal metres).</span></div>` }));
+      panels[2].appendChild(g);
+    }
+
+    // ----- KML OPTIONS tab -----
+    {
+      const g = el('div', { class: 'grid' });
+      g.appendChild(fieldText('Document Name', 'kml_name', state, { className: 'full', placeholder: 'leave empty = auto' }).wrap);
+      g.appendChild(fieldSelect('Altitude Policy', 'kml_alt_policy', state, ['KEEP','CLAMP','IGNORE'], { className: 'small' }).wrap);
+      g.appendChild(el('div', { class: 'field full', html: `<label>Policy meaning</label><div class="inline"><span class="pill">KEEP</span> as‑is (null→0) <span class="pill">CLAMP</span> 0–15000m <span class="pill">IGNORE</span> force 0</div>` }));
+      g.appendChild(el('div', { class: 'field full', html: `<label>RFS‑enhanced KML</label><div class="inline"><span>Includes RouteMark / FixMark, auto TOC/TOD, absolute altitude, extrude=1.</span></div>` }));
+      panels[3].appendChild(g);
+    }
+
+    // ----- ROUTE INFO tab -----
+    {
+      const pts = extractRoutePointsFromRoute(route);
+      const sample = pts.slice(0,5).map((p,i)=> 
+        `${i+1}. ${p.ident||''} ${p.lat.toFixed(6)} ${p.lon.toFixed(6)} alt=${p.alt_m?.toFixed(1)??'null'}`
+      ).join('\n');
+      const g = el('div', { class: 'grid' });
+      g.appendChild(el('div', { class: 'field full', html: `<label>Route summary</label><div class="mono">${escapeHtml(`${state.dep} → ${state.arr}\npoints: ${pts.length}\n\nfirst 5:\n${sample}`)}</div>` }));
+      panels[4].appendChild(g);
+    }
+
+    // initial tab visibility & badge sync
+    updateTabVisibility();
+    updatePlnUiForTarget();
+
+    // ----- Generate button -----
+    const btnGen = el('button', { class: 'btn success', html: '⚡ Generate Output' });
+    btnGen.addEventListener('click', () => {
+      try {
+        const tgt = String(state.target || '');
+        if(tgt.startsWith('—') || tgt.trim() === '') throw new Error('Please select a target format first.');
+
+        if(tgt.startsWith('RFS')) {
+          const { rfs, notes } = buildRfsFromRoute(route, state);
+          const out = JSON.stringify(rfs);
+          setStatus(['✅ RFS generated successfully', ...notes.map(n=>`⚠ ${n}`)]);
+          const fn = computeOutFilename('RFS', state.dep, state.arr);
+          showOutput(out, 'RFS', 'save as .rfs', fn, 'application/json');
+        }
+        else if(tgt.startsWith('PLN XML')) {
+          const out = buildPlnXmlFromRoute(route, state);
+          setStatus(['✅ PLN XML generated']);
+          showOutput(out, 'PLN XML', 'save as .pln', computeOutFilename('PLN_XML', state.dep, state.arr), 'application/xml');
+        }
+        else if(tgt.startsWith('PLN INI')) {
+          const out = buildPlnIniFromRoute(route, state);
+          setStatus(['✅ PLN INI generated']);
+          showOutput(out, 'PLN INI', 'save as .pln', computeOutFilename('PLN_INI', state.dep, state.arr), 'text/plain');
+        }
+        else if(tgt.startsWith('KML File -- RFS')) {
+          const out = buildKmlRfsFromRoute(route, state);
+          setStatus(['✅ KML (RFS) generated']);
+          showOutput(out, 'KML · RFS', 'save as .kml', computeOutFilename('KML_RFS', state.dep, state.arr), 'application/vnd.google-earth.kml+xml');
+        }
+        else if(tgt.startsWith('KML File -- GIS')) {
+          const out = buildKmlGisFromRoute(route, state);
+          setStatus(['✅ KML (GIS) generated']);
+          showOutput(out, 'KML · GIS', 'save as .kml', computeOutFilename('KML_GIS', state.dep, state.arr), 'application/vnd.google-earth.kml+xml');
+        }
+        else throw new Error(`Unknown target: ${tgt}`);
+      } catch(e) {
+        setStatus([`❌ Generation failed: ${e.message || e}`]);
+        hideOutput();
       }
     });
-    const isoInput = fieldText("UTC ISO","custom_iso",state,{className:"full"});
-    isoInput.input.disabled = false;
-    g.appendChild(dt.wrap); g.appendChild(isoInput.wrap);
-    panels[1].appendChild(g);
-  }
+    uiArea.appendChild(el('div', { style: 'margin-top:12px' }, [btnGen]));
+  };
 
-  // AIRCRAFT
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldText("AircraftID","liv_aircraft_id",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("LIV ID","liv_id",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("LIV NAME","liv_name",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("LIV BY","liv_by",state,{className:"small"}).wrap);
-    g.appendChild(fieldNumber("Version","liv_ver",state,{className:"tiny", min:0, max:9999}).wrap);
-    g.appendChild(fieldNumber("Type","liv_type",state,{className:"tiny", min:0, max:50}).wrap);
-    g.appendChild(fieldNumber("Date(unix)","liv_date",state,{className:"small", min:0, max:2147483647}).wrap);
-    g.appendChild(fieldCheckbox("IsFavorite","liv_fav",state,{className:"small"}).wrap);
-
-    g.appendChild(fieldRange("FUEL %","fuel_pct",state,{className:"full", min:0, max:100}).wrap);
-    g.appendChild(fieldRange("PAX","pax",state,{className:"full", min:0, max:800}).wrap);
-    g.appendChild(fieldRange("CARGO kg","cargo_kg",state,{className:"full", min:0, max:200000, step:1}).wrap);
-    g.appendChild(fieldCheckbox("ProNeeded","pro_needed",state,{className:"small"}).wrap);
-    g.appendChild(fieldRange("Cruise ft","cruise_ft",state,{className:"full", min:0, max:45000, step:1}).wrap);
-
-    panels[2].appendChild(g);
-  }
-
-  // FLIGHT PLAN
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldText("DEP","dep",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("ARR","arr",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("TO RWY","to_rwy",state,{className:"small", placeholder:"e.g. 07L"}).wrap);
-    g.appendChild(fieldText("LD RWY","ld_rwy",state,{className:"small", placeholder:"e.g. 26L"}).wrap);
-    g.appendChild(fieldSelect("START","start_pos",state,["GATE","RUNWAY"],{className:"small"}).wrap);
-    g.appendChild(fieldText("SpawnPoint ID","spawn_id",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("ARR ParkingPoint","arr_parking",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("Seed","seed",state,{className:"small", placeholder:"empty=auto"}).wrap);
-
-    g.appendChild(el("div",{class:"field full", html:`<label>Tip</label><div class="inline">Leave SpawnPoint ID / ARR ParkingPoint as <strong>0</strong> to use default.</div>`}));
-    panels[3].appendChild(g);
-  }
-
-  // METAR
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldSelect("METAR","metar_mode",state,["CUSTOM","REAL","RANDOM"],{className:"small"}).wrap);
-
-    const weather = fieldSelect("WEATHER","weather",state,["CLEAR","FOG","SNOW","RAIN","STORM"],{
-      className:"small",
-      onChange:()=>{
-        enforceWeatherConstraints(state, {fog_pct:fog.range, clouds:cloud.select, turb_pct:turb.range});
-        fog.range.value = state.fog_pct;
-        fog.valueSpan.textContent = String(state.fog_pct);
-        cloud.select.value = state.clouds;
+  /* ------------------------------------------------------------------------
+     14. Core loader: text → detect → parse → RoutePack → render UI
+  ------------------------------------------------------------------------ */
+  const loadFromText = (txt) => {
+    hideOutput();
+    const kind = detectInputKind(txt);
+    if(!kind) {
+      setStatus(['❌ Cannot detect input format – please check content.']);
+      document.getElementById('uiArea').classList.add('hidden');
+      return;
+    }
+    try {
+      if(kind === 'PLN') {
+        const pln = parsePlnAny(txt);
+        const missing = pln.waypoints.filter(w => w.lat==null || w.lon==null).length;
+        const route = makeRoutePackFromPln(pln);
+        setStatus([`✅ Detected PLN (${pln.format}) : ${pln.departure} → ${pln.destination} | waypoints: ${pln.waypoints.length}`, 
+                   missing ? `⚠ ${missing} waypoint(s) missing coordinates – they will be ignored.` : '']);
+        renderUnifiedUi(route, `PLN (${pln.format})`);
       }
+      else if(kind === 'RFS') {
+        const rfsPack = parseRfsJson(txt);
+        const route = makeRoutePackFromRfs(rfsPack);
+        setStatus([`✅ Detected RFS : ${rfsPack.dep} → ${rfsPack.arr} | FPPoints: ${rfsPack.points.length}`]);
+        renderUnifiedUi(route, 'RFS');
+      }
+      else if(kind === 'KML') {
+        const kmlPack = parseKmlAny(txt);
+        const route = makeRoutePackFromKml(kmlPack);
+        setStatus([`✅ Detected ${kmlPack.kind} : ${kmlPack.dep || '?'} → ${kmlPack.arr || '?'} | points: ${kmlPack.points.length}`]);
+        renderUnifiedUi(route, kmlPack.kind);
+      }
+      else throw new Error(`Unhandled kind: ${kind}`);
+    } catch(e) {
+      setStatus([`❌ ${kind} parse failed: ${e.message || e}`]);
+      document.getElementById('uiArea').classList.add('hidden');
+    }
+  };
+
+  /* ------------------------------------------------------------------------
+     15. Event binding – all inside IIFE, zero globals
+  ------------------------------------------------------------------------ */
+  document.addEventListener('DOMContentLoaded', () => {
+    const inputBox = document.getElementById('inputBox');
+    const btnLoad = document.getElementById('btnLoad');
+    const btnClear = document.getElementById('btnClear');
+    const btnCopy = document.getElementById('btnCopy');
+    const btnDownload = document.getElementById('btnDownload');
+
+    btnLoad.addEventListener('click', () => {
+      const txt = inputBox.value.trim();
+      if(!txt) { setStatus(['❌ Input is empty']); document.getElementById('uiArea').classList.add('hidden'); return; }
+      loadFromText(txt);
     });
-    g.appendChild(weather.wrap);
 
-    const windDir = fieldRange("WIND DIR","wind_dir",state,{className:"full", min:0, max:359});
-    const windSpd = fieldRange("WIND SPD","wind_spd",state,{className:"full", min:0, max:40});
-    g.appendChild(windDir.wrap); g.appendChild(windSpd.wrap);
-
-    const temp = fieldRange("TEMP °C","temp_c",state,{className:"full", min:-30, max:40});
-    const qnh = fieldRange("QNH","qnh",state,{className:"full", min:900, max:1100});
-    const vis = fieldRange("VIS m","vis_m",state,{className:"full", min:1000, max:9999});
-    g.appendChild(temp.wrap); g.appendChild(qnh.wrap); g.appendChild(vis.wrap);
-
-    const fog = fieldRange("FOG %","fog_pct",state,{className:"full", min:0, max:100});
-    const snow = fieldSelect("SNOW","snow_cov",state,["NONE","LOW","MEDIUM","HIGH"],{className:"small"});
-    g.appendChild(fog.wrap); g.appendChild(snow.wrap);
-
-    const cloud = fieldSelect("CLOUDS","clouds",state,["NO SIGNIFICANT CLOUD","FEW CLOUDS","SCATTERED CLOUDS","BROKEN CLOUDS","OVERCAST"],{className:"full"});
-    g.appendChild(cloud.wrap);
-
-    const base = fieldRange("BASE ft","cloud_base_ft",state,{className:"full", min:4500, max:45000});
-    const turb = fieldRange("TURB %","turb_pct",state,{className:"full", min:0, max:100});
-    g.appendChild(base.wrap); g.appendChild(turb.wrap);
-
-    g.appendChild(el("div",{class:"field full", html:`<label>Constraints</label><div class="inline">CLEAR locks fog=0; non-CLEAR forces clouds=OVERCAST and fog≥5; STORM locks turbulence slider.</div>`}));
-
-    enforceWeatherConstraints(state, {fog_pct:fog.range, clouds:cloud.select, turb_pct:turb.range});
-    fog.range.value = state.fog_pct; fog.valueSpan.textContent = String(state.fog_pct);
-    cloud.select.value = state.clouds;
-
-    panels[4].appendChild(g);
-  }
-
-  const btnGen = el("button",{class:"btn success", html:"Generate RFS"});
-  btnGen.addEventListener("click", ()=>{
-    try{
-      const {rfs, notes} = buildRfsFromPln(pln, state);
-      const s = JSON.stringify(rfs);
-      const lines = [
-        `✅ Generated RFS.`,
-        ...(notes.length ? ["⚠ Notes:", ...notes.map(n=>`- ${n}`)] : [])
-      ];
-      setStatus(lines);
-
-      const fn = computeOutFilename("RFS", state.dep, state.arr);
-      showOutput(s, "RFS JSON", "Download will save as .rfs", fn, "application/json");
-    }catch(e){
-      setStatus([`❌ Error: ${e.message || e}`]);
+    btnClear.addEventListener('click', () => {
+      inputBox.value = '';
+      document.getElementById('uiArea').classList.add('hidden');
       hideOutput();
-    }
-  });
+      setStatus(['Ready.']);
+    });
 
-  uiArea.appendChild(el("div",{style:"margin-top:12px"},[btnGen]));
-}
-
-function renderRfsToPlnUi(rfsPack){
-  const uiArea = document.getElementById("uiArea");
-  uiArea.innerHTML = "";
-  uiArea.classList.remove("hidden");
-  hideOutput();
-
-  const routePts = extractRoutePointsFromRfsPoints(rfsPack.points);
-  let cruiseGuess = 12000;
-  if(routePts.length){
-    const alts = routePts.map(p=>p.alt_m).filter(v=>v!=null).sort((a,b)=>a-b);
-    if(alts.length){
-      const mid = alts[Math.floor(alts.length/2)];
-      cruiseGuess = Math.round(mToFeet(mid));
-    }
-  }
-
-  const state = {
-    out_kind: "XML (advanced)",
-    title: (rfsPack.rfs.Title || `${rfsPack.dep} to ${rfsPack.arr}`),
-    descr: (rfsPack.rfs.Description || ""),
-    fp_type: "IFR",
-    route_type: "LowAlt",
-
-    dep: rfsPack.dep || "",
-    arr: rfsPack.arr || "",
-    to_rwy: rfsPack.to_rwy || "",
-    ld_rwy: rfsPack.ld_rwy || "",
-
-    dep_name: "",
-    arr_name: "",
-
-    cruise_ft: cruiseGuess,
-    include_rwy: true
-  };
-
-  const {tabs, panels} = makeTabs(["PLN META","AIRPORT / RWY"]);
-  uiArea.appendChild(tabs);
-
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldSelect("OUT","out_kind",state,["XML (advanced)","INI (legacy)"],{className:"small"}).wrap);
-    g.appendChild(fieldSelect("FPType","fp_type",state,["IFR","VFR"],{className:"tiny"}).wrap);
-    g.appendChild(fieldSelect("RouteType","route_type",state,["LowAlt","HighAlt"],{className:"tiny"}).wrap);
-    g.appendChild(fieldText("Title","title",state,{className:"full"}).wrap);
-    g.appendChild(fieldText("Descr","descr",state,{className:"full"}).wrap);
-    panels[0].appendChild(g);
-  }
-
-  {
-    const g = el("div",{class:"grid"});
-    g.appendChild(fieldText("DEP","dep",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("ARR","arr",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("TO RWY","to_rwy",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("LD RWY","ld_rwy",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("DEP Name","dep_name",state,{className:"small"}).wrap);
-    g.appendChild(fieldText("ARR Name","arr_name",state,{className:"small"}).wrap);
-    g.appendChild(fieldRange("Cruise ft","cruise_ft",state,{className:"full", min:0, max:45000}).wrap);
-    g.appendChild(fieldCheckbox("Include RunwayNumberFP in XML","include_rwy",state,{className:"small"}).wrap);
-    panels[1].appendChild(g);
-  }
-
-  const btnGen = el("button",{class:"btn success", html:"Generate PLN"});
-  btnGen.addEventListener("click", ()=>{
-    try{
-      let outText="", kindLabel="", kindKey="", mime="text/plain";
-      if(String(state.out_kind).startsWith("XML")){
-        outText = buildPlnXmlFromRfs(rfsPack, state);
-        kindLabel = "PLN XML (AceXML)";
-        kindKey = "PLN_XML";
-        mime = "application/xml";
-        setStatus([`✅ Output: XML PLN (AceXML)`]);
-      }else{
-        outText = buildPlnIniFromRfs(rfsPack, state);
-        kindLabel = "PLN INI ([flightplan])";
-        kindKey = "PLN_INI";
-        mime = "text/plain";
-        setStatus([`✅ Output: INI PLN ([flightplan])`]);
+    btnCopy.addEventListener('click', async () => {
+      const text = document.getElementById('outputBox').value;
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus(['✅ Output copied to clipboard']);
+      } catch {
+        const ta = document.getElementById('outputBox');
+        ta.focus(); ta.select();
+        document.execCommand('copy');
+        setStatus(['✅ Output copied (fallback)']);
       }
+    });
 
-      const fn = computeOutFilename(kindKey, state.dep, state.arr);
-      showOutput(outText, kindLabel, "Download will save as .pln", fn, mime);
-    }catch(e){
-      setStatus([`❌ Error: ${e.message || e}`]);
-      hideOutput();
-    }
+    btnDownload.addEventListener('click', () => {
+      if(!lastOutput.text) { setStatus(['❌ No output to download']); return; }
+      const blob = new Blob([lastOutput.text], { type: lastOutput.mime || 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = lastOutput.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus([`✅ Downloaded: ${lastOutput.filename}`]);
+    });
+
+    // ----- Global drag protection -----
+    ['dragenter','dragover','dragleave','drop'].forEach(evt => {
+      window.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+    });
+
+    inputBox.addEventListener('dragenter', e => { e.preventDefault(); inputBox.classList.add('drop-active'); });
+    inputBox.addEventListener('dragover', e => { e.preventDefault(); inputBox.classList.add('drop-active'); });
+    inputBox.addEventListener('dragleave', e => { e.preventDefault(); inputBox.classList.remove('drop-active'); });
+    inputBox.addEventListener('drop', async e => {
+      e.preventDefault();
+      inputBox.classList.remove('drop-active');
+      const dt = e.dataTransfer;
+      if(!dt?.files?.length) { setStatus(['❌ Drop contains no files']); return; }
+      const file = dt.files[0];
+      const name = (file.name || '').toLowerCase();
+      const isText = name.endsWith('.pln') || name.endsWith('.rfs') || name.endsWith('.kml') ||
+                     name.endsWith('.txt') || name.endsWith('.json') || name.endsWith('.xml') || name.endsWith('.ini') ||
+                     (file.type || '').startsWith('text/') || file.type === 'application/json' || file.type === 'application/xml' ||
+                     file.type === 'application/vnd.google-earth.kml+xml' || file.type === '';
+      if(!isText) { setStatus([`❌ Unsupported file type: ${file.name || 'unknown'}`]); return; }
+      try {
+        const text = await file.text();
+        inputBox.value = text;
+        setStatus([`✅ Loaded file: ${file.name}`, '⏳ Auto‑parsing...']);
+        setTimeout(() => loadFromText(text), 200);
+      } catch(err) {
+        setStatus([`❌ Failed to read file: ${err.message || err}`]);
+      }
+    });
   });
 
-  uiArea.appendChild(el("div",{style:"margin-top:12px"},[btnGen]));
-}
-
-/* ============================================================
-   12) Core loader (used by button & drag-drop)
-   ============================================================ */
-function loadFromText(txt){
-  hideOutput();
-  const kind = detectInputKind(txt);
-  if(!kind){
-    setStatus(["❌ Could not detect input kind. Paste or drop PLN XML/INI or RFS JSON."]);
-    document.getElementById("uiArea").classList.add("hidden");
-    return;
-  }
-  try{
-    if(kind==="PLN"){
-      const pln = parsePlnAny(txt);
-      const missing = pln.waypoints.filter(w=>w.lat==null || w.lon==null).length;
-      const lines = [
-        `✅ Detected PLN (${pln.format}): ${pln.departure} -> ${pln.destination} | waypoints: ${pln.waypoints.length}`,
-      ];
-      if(missing) lines.push(`⚠ Missing coords waypoints: ${missing} (they will be dropped)`);
-      setStatus(lines);
-      renderPlnToRfsUi(pln);
-    }else{
-      const rfsPack = parseRfsJson(txt);
-      setStatus([`✅ Detected RFS: ${rfsPack.dep} -> ${rfsPack.arr} | FPPoints: ${rfsPack.points.length}`]);
-      renderRfsToPlnUi(rfsPack);
-    }
-  }catch(e){
-    setStatus([`❌ Failed to parse as ${kind}: ${e.message || e}`]);
-    document.getElementById("uiArea").classList.add("hidden");
-  }
-}
-
-/* ============================================================
-   13) Wire buttons + download
-   ============================================================ */
-document.getElementById("btnLoad").addEventListener("click", ()=>{
-  const txt = document.getElementById("inputBox").value.trim();
-  if(!txt){
-    setStatus(["❌ Empty input."]);
-    document.getElementById("uiArea").classList.add("hidden");
-    return;
-  }
-  loadFromText(txt);
-});
-
-document.getElementById("btnClear").addEventListener("click", ()=>{
-  document.getElementById("inputBox").value = "";
-  document.getElementById("uiArea").classList.add("hidden");
-  hideOutput();
-  setStatus(["Ready."]);
-});
-
-document.getElementById("btnCopy").addEventListener("click", async ()=>{
-  const text = document.getElementById("outputBox").value;
-  try{
-    await navigator.clipboard.writeText(text);
-    setStatus(["✅ Output copied to clipboard."]);
-  }catch(e){
-    const ta = document.getElementById("outputBox");
-    ta.focus();
-    ta.select();
-    document.execCommand("copy");
-    setStatus(["✅ Output copied (fallback)."]);
-  }
-});
-
-document.getElementById("btnDownload").addEventListener("click", ()=>{
-  if(!lastOutput.text){
-    setStatus(["❌ Nothing to download. Generate output first."]);
-    return;
-  }
-  const blob = new Blob([lastOutput.text], {type:lastOutput.mime || "text/plain"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = lastOutput.filename || "output.txt";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  setStatus([`✅ Downloaded: ${lastOutput.filename}`]);
-});
-
-/* ============================================================
-   14) Drag & drop integration
-   ============================================================ */
-// Prevent the browser from navigating away when dropping a file anywhere.
-["dragenter","dragover","dragleave","drop"].forEach(evt=>{
-  window.addEventListener(evt, (e)=>{
-    e.preventDefault();
-    e.stopPropagation();
-  }, {passive:false});
-});
-
-const inputBox = document.getElementById("inputBox");
-
-inputBox.addEventListener("dragenter", (e)=>{
-  e.preventDefault(); e.stopPropagation();
-  inputBox.classList.add("drop-active");
-});
-inputBox.addEventListener("dragover", (e)=>{
-  e.preventDefault(); e.stopPropagation();
-  inputBox.classList.add("drop-active");
-});
-inputBox.addEventListener("dragleave", (e)=>{
-  e.preventDefault(); e.stopPropagation();
-  inputBox.classList.remove("drop-active");
-});
-inputBox.addEventListener("drop", async (e)=>{
-  e.preventDefault(); e.stopPropagation();
-  inputBox.classList.remove("drop-active");
-
-  const dt = e.dataTransfer;
-  if(!dt || !dt.files || !dt.files.length){
-    setStatus(["❌ Drop has no files."]);
-    return;
-  }
-
-  const file = dt.files[0];
-  if(!looksLikeTextFile(file)){
-    setStatus([`❌ Unsupported file type: ${file.name || "(unnamed)"}`]);
-    return;
-  }
-
-  try{
-    const text = await readFileAsText(file);
-    inputBox.value = text;
-
-    setStatus([`✅ Loaded file into input: ${file.name}`, "Now click Load Input (or it will auto-load in 0.2s)."]);
-    // Auto-load shortly (so user sees it filled)
-    setTimeout(()=>loadFromText(text), 200);
-  }catch(err){
-    setStatus([`❌ Failed to read file: ${err?.message || err}`]);
-  }
-});
+})();
 </script>
 </body>
 </html>

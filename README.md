@@ -1,6 +1,6 @@
-# PLN ↔ RFS Converter (Offline)
+# PLN ↔ RFS ↔ KML Converter (Offline)
 
-A tiny **browser-only** tool to convert **MSFS/Flight Simulator .PLN** routes and **RFS .RFS (JSON)** flight plans — with editable fields like weather, time, load, and runways.
+A tiny **browser-only** tool to convert **MSFS/Flight Simulator .PLN** routes, **KML Geoplan File** and **RFS .RFS (JSON)** flight plans — with editable fields like weather, time, load, and runways.
 
 **Try it online:** (GitHub Pages link here)  
 **No install. No backend. Works offline.**
@@ -9,12 +9,13 @@ A tiny **browser-only** tool to convert **MSFS/Flight Simulator .PLN** routes an
 Flight plans are fragmented across simulators:
 - MSFS exports `.pln`
 - RFS uses `.rfs` JSON with its own schema
+- Geoplan Software exports `.kml`
 
 This tool bridges the gap so you can move routes between platforms quickly.
 
 ## Features
-- Convert **PLN → RFS** and **RFS → PLN**
-- Drag & drop `.pln` / `.rfs` / `.txt` into the page
+- Convert between **PLN** **RFS** and **KML**
+- Drag & drop `.pln` / `.rfs` / `.kml`/`.txt`  into the page
 - Offline by design (pure HTML + JS)
 - Edit common RFS fields:
   - Weather / METAR mode
@@ -24,7 +25,7 @@ This tool bridges the gap so you can move routes between platforms quickly.
 
 ## Quick Start (30 seconds)
 1. Open the website (or download and open `index.html`)
-2. Paste or drop your `.pln` / `.rfs`
+2. Paste or drop your `.pln` / `.rfs`/ `.kml`
 3. Click **Load Input**
 4. Adjust settings
 5. Click **Generate**
